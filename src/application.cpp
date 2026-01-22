@@ -85,10 +85,20 @@ bool Application::init_imgui() {
 }
 
 void Application::run() {
+    if (!initial_project_.empty()) {
+        if (!main_window_->load_project(initial_project_)) {
+            std::fprintf(stderr, "Failed to load project: %s\n", initial_project_.c_str());
+        }
+    }
+
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
         render_frame();
     }
+}
+
+void Application::set_initial_project(const std::string& filepath) {
+    initial_project_ = filepath;
 }
 
 void Application::render_frame() {

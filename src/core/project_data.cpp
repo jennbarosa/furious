@@ -128,6 +128,11 @@ bool ProjectData::save_to_file(const std::string& filepath) const {
     j["transport"]["metronome_enabled"] = metronome_enabled;
     j["transport"]["follow_playhead"] = follow_playhead;
     j["transport"]["loop_enabled"] = loop_enabled;
+    j["transport"]["playhead_beat"] = playhead_beat;
+    j["timeline"]["zoom"] = timeline_zoom;
+    j["timeline"]["zoom_y"] = timeline_zoom_y;
+    j["timeline"]["scroll"] = timeline_scroll;
+    j["timeline"]["scroll_y"] = timeline_scroll_y;
     j["audio"]["filepath"] = audio_filepath;
     j["audio"]["clip_start_seconds"] = clip_start_seconds;
     j["audio"]["clip_end_seconds"] = clip_end_seconds;
@@ -189,6 +194,15 @@ bool ProjectData::load_from_file(const std::string& filepath, ProjectData& out_d
         out_data.metronome_enabled = transport.value("metronome_enabled", false);
         out_data.follow_playhead = transport.value("follow_playhead", true);
         out_data.loop_enabled = transport.value("loop_enabled", false);
+        out_data.playhead_beat = transport.value("playhead_beat", 0.0);
+    }
+
+    if (j.contains("timeline")) {
+        auto& timeline = j["timeline"];
+        out_data.timeline_zoom = timeline.value("zoom", 1.0f);
+        out_data.timeline_zoom_y = timeline.value("zoom_y", 1.0f);
+        out_data.timeline_scroll = timeline.value("scroll", 0.0f);
+        out_data.timeline_scroll_y = timeline.value("scroll_y", 0.0f);
     }
 
     if (j.contains("audio")) {

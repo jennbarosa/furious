@@ -17,6 +17,11 @@ struct ProjectData {
     bool metronome_enabled = false;
     bool follow_playhead = true;
     bool loop_enabled = false;
+    double playhead_beat = 0.0;
+    float timeline_zoom = 1.0f;
+    float timeline_zoom_y = 1.0f;
+    float timeline_scroll = 0.0f;
+    float timeline_scroll_y = 0.0f;
     std::string audio_filepath;
     double clip_start_seconds = 0.0;
     double clip_end_seconds = 0.0;

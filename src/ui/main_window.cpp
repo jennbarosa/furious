@@ -758,6 +758,11 @@ bool MainWindow::save_project(const std::string& filepath) {
     data.metronome_enabled = transport_controls_.metronome_enabled();
     data.follow_playhead = transport_controls_.follow_playhead();
     data.loop_enabled = transport_controls_.loop_enabled();
+    data.playhead_beat = timeline_.playhead_position();
+    data.timeline_zoom = timeline_.zoom();
+    data.timeline_zoom_y = timeline_.zoom_y();
+    data.timeline_scroll = timeline_.scroll_offset();
+    data.timeline_scroll_y = timeline_.scroll_offset_y();
 
     if (audio_engine_.has_clip()) {
         data.audio_filepath = audio_engine_.clip()->filepath();
@@ -814,9 +819,13 @@ bool MainWindow::load_project(const std::string& filepath) {
     }
     timeline_data_.set_clips(data.clips);
 
-    timeline_.set_playhead_position(0.0);
+    timeline_.set_playhead_position(data.playhead_beat);
+    timeline_.set_zoom(data.timeline_zoom);
+    timeline_.set_zoom_y(data.timeline_zoom_y);
+    timeline_.set_scroll_offset(data.timeline_scroll);
+    timeline_.set_scroll_offset_y(data.timeline_scroll_y);
     timeline_.clear_selection();
-    audio_engine_.set_playhead_seconds(0.0);
+    audio_engine_.set_playhead_seconds(data.playhead_beat * project_.tempo().beat_duration_seconds());
 
     start_cache_building();
 

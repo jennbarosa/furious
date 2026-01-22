@@ -21,11 +21,14 @@ public:
     void run();
     void shutdown();
 
+    void set_initial_project(const std::string& filepath);
+
     void render_frame();
 
 private:
     GLFWwindow* window_ = nullptr;
     std::unique_ptr<MainWindow> main_window_;
+    std::string initial_project_;
 
     bool init_glfw();
     bool init_imgui();
