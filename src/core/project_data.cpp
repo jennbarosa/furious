@@ -133,6 +133,11 @@ bool ProjectData::save_to_file(const std::string& filepath) const {
     j["timeline"]["zoom_y"] = timeline_zoom_y;
     j["timeline"]["scroll"] = timeline_scroll;
     j["timeline"]["scroll_y"] = timeline_scroll_y;
+    j["window"]["width"] = window_width;
+    j["window"]["height"] = window_height;
+    if (!imgui_layout.empty()) {
+        j["window"]["imgui_layout"] = imgui_layout;
+    }
     j["audio"]["filepath"] = audio_filepath;
     j["audio"]["clip_start_seconds"] = clip_start_seconds;
     j["audio"]["clip_end_seconds"] = clip_end_seconds;
@@ -203,6 +208,13 @@ bool ProjectData::load_from_file(const std::string& filepath, ProjectData& out_d
         out_data.timeline_zoom_y = timeline.value("zoom_y", 1.0f);
         out_data.timeline_scroll = timeline.value("scroll", 0.0f);
         out_data.timeline_scroll_y = timeline.value("scroll_y", 0.0f);
+    }
+
+    if (j.contains("window")) {
+        auto& window = j["window"];
+        out_data.window_width = window.value("width", 1280);
+        out_data.window_height = window.value("height", 720);
+        out_data.imgui_layout = window.value("imgui_layout", "");
     }
 
     if (j.contains("audio")) {

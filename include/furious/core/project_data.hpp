@@ -22,6 +22,9 @@ struct ProjectData {
     float timeline_zoom_y = 1.0f;
     float timeline_scroll = 0.0f;
     float timeline_scroll_y = 0.0f;
+    int window_width = 1280;
+    int window_height = 720;
+    std::string imgui_layout;
     std::string audio_filepath;
     double clip_start_seconds = 0.0;
     double clip_end_seconds = 0.0;

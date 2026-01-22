@@ -12,6 +12,8 @@
 #include "furious/scripting/script_engine.hpp"
 #include <memory>
 
+struct GLFWwindow;
+
 namespace furious {
 
 class MainWindow {
@@ -43,7 +45,10 @@ public:
     [[nodiscard]] bool is_dirty() const { return dirty_; }
     void mark_dirty();
 
+    void set_glfw_window(GLFWwindow* window) { glfw_window_ = window; }
+
 private:
+    GLFWwindow* glfw_window_ = nullptr;
     Project project_;
     TimelineData timeline_data_;
     SourceLibrary source_library_;
@@ -56,6 +61,7 @@ private:
     ProfilerWindow profiler_;
 
     bool first_frame_ = true;
+    bool layout_loaded_ = false;
     double last_playhead_beats_ = 0.0;
     std::string current_project_path_;
     bool dirty_ = false;

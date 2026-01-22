@@ -2,6 +2,7 @@
 #include "furious/core/project_data.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include <GLFW/glfw3.h>
 #include <nfd.h>
 #include <algorithm>
 #include <cmath>
@@ -289,7 +290,9 @@ void MainWindow::setup_dockspace() {
 
     if (first_frame_) {
         first_frame_ = false;
-        build_default_layout(dockspace_id);
+        if (!layout_loaded_) {
+            build_default_layout(dockspace_id);
+        }
     }
 
     ImGui::End();
@@ -774,8 +777,17 @@ bool MainWindow::save_project(const std::string& filepath) {
     data.tracks = timeline_data_.tracks();
     data.clips = timeline_data_.clips();
 
+    if (glfw_window_) {
+        glfwGetWindowSize(glfw_window_, &data.window_width, &data.window_height);
+    }
+    const char* ini_data = ImGui::SaveIniSettingsToMemory();
+    if (ini_data) {
+        data.imgui_layout = ini_data;
+    }
+
     if (data.save_to_file(filepath)) {
         current_project_path_ = filepath;
+        transport_controls_.set_current_project_path(filepath);
         dirty_ = false;
         return true;
     }
@@ -827,9 +839,22 @@ bool MainWindow::load_project(const std::string& filepath) {
     timeline_.clear_selection();
     audio_engine_.set_playhead_seconds(data.playhead_beat * project_.tempo().beat_duration_seconds());
 
+    if (glfw_window_ && data.window_width > 0 && data.window_height > 0) {
+        glfwSetWindowSize(glfw_window_, data.window_width, data.window_height);
+    }
+    if (!data.imgui_layout.empty()) {
+        if (!first_frame_) {
+            ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
+            ImGui::DockBuilderRemoveNode(dockspace_id);
+        }
+        ImGui::LoadIniSettingsFromMemory(data.imgui_layout.c_str(), data.imgui_layout.size());
+        layout_loaded_ = true;
+    }
+
     start_cache_building();
 
     current_project_path_ = filepath;
+    transport_controls_.set_current_project_path(filepath);
     dirty_ = false;
     return true;
 }

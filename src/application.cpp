@@ -28,6 +28,7 @@ bool Application::initialize() {
     }
 
     main_window_ = std::make_unique<MainWindow>();
+    main_window_->set_glfw_window(window_);
     return true;
 }
 
