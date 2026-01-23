@@ -45,11 +45,11 @@ public:
     void clear();
     void clear_all();
 
+    static std::string generate_id();
+
 private:
     std::vector<Track> tracks_;
     std::vector<TimelineClip> clips_;
-
-    static std::string generate_id();
 };
 
 } // namespace furious
