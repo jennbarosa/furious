@@ -192,6 +192,7 @@ add_library(furious_lib STATIC
     src/core/project_data.cpp
     src/core/tempo.cpp
     src/core/timeline_data.cpp
+    src/core/command.cpp
     src/audio/audio_clip.cpp
     src/audio/audio_engine.cpp
     src/video/source_library.cpp
@@ -244,6 +245,7 @@ if(BUILD_TESTS)
         tests/video_test.cpp
         tests/effects_test.cpp
         tests/script_engine_test.cpp
+        tests/command_test.cpp
     )
 
     target_link_libraries(furious_tests PRIVATE
@@ -277,6 +279,7 @@ if(BUILD_INTEGRATION_TESTS)
         src/core/project_data.cpp
         src/core/tempo.cpp
         src/core/timeline_data.cpp
+        src/core/command.cpp
         src/audio/audio_clip.cpp
         src/audio/audio_engine.cpp
         src/video/source_library.cpp
@@ -313,6 +316,7 @@ if(BUILD_INTEGRATION_TESTS)
         tests/integration/clip_tests.cpp
         tests/integration/sync_tests.cpp
         tests/integration/user_flow_tests.cpp
+        tests/integration/undo_redo_tests.cpp
     )
 
     target_link_libraries(furious_integration_tests PRIVATE
