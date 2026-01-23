@@ -1,12 +1,12 @@
 #include "furious/ui/main_window.hpp"
 #include "furious/core/project_data.hpp"
+#include "furious/core/clip_commands.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <GLFW/glfw3.h>
 #include <nfd.h>
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 
 namespace furious {
 
@@ -42,6 +42,7 @@ void MainWindow::render() {
     auto t0 = std::chrono::high_resolution_clock::now();
 
     setup_dockspace();
+    handle_keyboard_shortcuts();
 
     auto t1 = std::chrono::high_resolution_clock::now();
 
@@ -160,13 +161,23 @@ void MainWindow::render() {
 
     std::string clip_to_delete;
     if (timeline_.consume_delete_request(clip_to_delete)) {
-        timeline_data_.remove_clip(clip_to_delete);
+        execute_command(std::make_unique<RemoveClipCommand>(timeline_data_, clip_to_delete));
         timeline_.clear_selection();
-        dirty_ = true;
     }
 
     if (timeline_.consume_data_modified()) {
         dirty_ = true;
+    }
+
+    TimelineClip old_clip_state, new_clip_state;
+    if (timeline_.consume_clip_modification(old_clip_state, new_clip_state)) {
+        execute_command(std::make_unique<ModifyClipCommand>(
+            timeline_data_, old_clip_state.id, old_clip_state, new_clip_state, "Move clip"));
+    }
+
+    if (viewport_.consume_clip_modification(old_clip_state, new_clip_state)) {
+        execute_command(std::make_unique<ModifyClipCommand>(
+            timeline_data_, old_clip_state.id, old_clip_state, new_clip_state, "Move clip in viewport"));
     }
 
     is_playing = transport_controls_.is_playing();
@@ -401,6 +412,7 @@ void MainWindow::render_sources_panel() {
 
         if (ImGui::SmallButton("+")) {
             TimelineClip clip;
+            clip.id = TimelineData::generate_id();
             clip.source_id = source.id;
             clip.start_beat = timeline_.playhead_position();
 
@@ -416,9 +428,8 @@ void MainWindow::render_sources_panel() {
             }
             clip.track_index = available_track;
 
-            timeline_data_.add_clip(clip);
+            execute_command(std::make_unique<AddClipCommand>(timeline_data_, clip));
             video_engine_.prefetch_clip(clip.id, clip.source_id, clip.source_start_seconds);
-            dirty_ = true;
         }
         ImGui::SameLine();
         if (ImGui::SmallButton("X")) {
@@ -498,55 +509,96 @@ void MainWindow::render_effects_panel() {
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+        TimelineClip state_before_this_frame = *clip;
+
+        bool any_active = false;
+        bool any_deactivated_after_edit = false;
+
         ImGui::Text("Position");
         ImGui::PushItemWidth(-70);
-        if (ImGui::DragFloat("X##pos", &clip->position_x, 1.0f, -10000.0f, 10000.0f, "%.0f px")) dirty_ = true;
-        if (ImGui::DragFloat("Y##pos", &clip->position_y, 1.0f, -10000.0f, 10000.0f, "%.0f px")) dirty_ = true;
+        ImGui::DragFloat("X##pos", &clip->position_x, 1.0f, -10000.0f, 10000.0f, "%.0f px");
+        if (ImGui::IsItemActive()) any_active = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) any_deactivated_after_edit = true;
+        ImGui::DragFloat("Y##pos", &clip->position_y, 1.0f, -10000.0f, 10000.0f, "%.0f px");
+        if (ImGui::IsItemActive()) any_active = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) any_deactivated_after_edit = true;
         ImGui::PopItemWidth();
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset##pos")) {
+            TimelineClip old_state = *clip;
             clip->position_x = 0.0f;
             clip->position_y = 0.0f;
-            dirty_ = true;
+            execute_command(std::make_unique<ModifyClipCommand>(
+                timeline_data_, clip->id, old_state, *clip, "Reset position"));
         }
 
         ImGui::Spacing();
         ImGui::Text("Scale");
         ImGui::PushItemWidth(-70);
-        if (ImGui::DragFloat("X##scale", &clip->scale_x, 0.01f, 0.01f, 10.0f, "%.2f")) dirty_ = true;
-        if (ImGui::DragFloat("Y##scale", &clip->scale_y, 0.01f, 0.01f, 10.0f, "%.2f")) dirty_ = true;
+        ImGui::DragFloat("X##scale", &clip->scale_x, 0.01f, 0.01f, 10.0f, "%.2f");
+        if (ImGui::IsItemActive()) any_active = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) any_deactivated_after_edit = true;
+        ImGui::DragFloat("Y##scale", &clip->scale_y, 0.01f, 0.01f, 10.0f, "%.2f");
+        if (ImGui::IsItemActive()) any_active = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) any_deactivated_after_edit = true;
         ImGui::PopItemWidth();
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset##scale")) {
+            TimelineClip old_state = *clip;
             clip->scale_x = 1.0f;
             clip->scale_y = 1.0f;
-            dirty_ = true;
+            execute_command(std::make_unique<ModifyClipCommand>(
+                timeline_data_, clip->id, old_state, *clip, "Reset scale"));
         }
 
         ImGui::Spacing();
         ImGui::Text("Rotation");
         ImGui::PushItemWidth(-70);
-        if (ImGui::DragFloat("##rotation", &clip->rotation, 1.0f, -360.0f, 360.0f, "%.1f deg")) dirty_ = true;
+        ImGui::DragFloat("##rotation", &clip->rotation, 1.0f, -360.0f, 360.0f, "%.1f deg");
+        if (ImGui::IsItemActive()) any_active = true;
+        if (ImGui::IsItemDeactivatedAfterEdit()) any_deactivated_after_edit = true;
         ImGui::PopItemWidth();
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset##rot")) {
+            TimelineClip old_state = *clip;
             clip->rotation = 0.0f;
-            dirty_ = true;
+            execute_command(std::make_unique<ModifyClipCommand>(
+                timeline_data_, clip->id, old_state, *clip, "Reset rotation"));
+        }
+
+        if (any_active && edit_mode_ == EditMode::None) {
+            edit_mode_ = EditMode::Transform;
+            property_edit_initial_state_ = state_before_this_frame;
+        }
+
+        if (any_deactivated_after_edit && edit_mode_ == EditMode::Transform) {
+            execute_command(std::make_unique<ModifyClipCommand>(
+                timeline_data_, clip->id, property_edit_initial_state_, *clip, "Transform clip"));
+            edit_mode_ = EditMode::None;
+        }
+
+        if (!any_active && edit_mode_ == EditMode::Transform) {
+            edit_mode_ = EditMode::None;
         }
 
         ImGui::Spacing();
         if (ImGui::Button("Reset All")) {
+            TimelineClip old_state = *clip;
             clip->position_x = 0.0f;
             clip->position_y = 0.0f;
             clip->scale_x = 1.0f;
             clip->scale_y = 1.0f;
             clip->rotation = 0.0f;
-            dirty_ = true;
+            execute_command(std::make_unique<ModifyClipCommand>(
+                timeline_data_, clip->id, old_state, *clip, "Reset all transforms"));
         }
     }
 
     if (ImGui::CollapsingHeader("Effects", ImGuiTreeNodeFlags_DefaultOpen)) {
         const auto& available_effects = script_engine_.available_effects();
+
+        bool any_effect_drag_active = false;
+        bool any_effect_drag_deactivated = false;
 
         for (const auto& effect_info : available_effects) {
             ImGui::PushID(effect_info.id.c_str());
@@ -565,8 +617,9 @@ void MainWindow::render_effects_panel() {
 
             ImGui::Text("%s", effect_info.name.c_str());
 
+            bool was_enabled = is_enabled;
             if (ImGui::Checkbox("Enabled", &is_enabled)) {
-                dirty_ = true;
+                TimelineClip old_state = *clip;
                 if (is_enabled && !active_effect) {
                     ClipEffect new_effect;
                     new_effect.effect_id = effect_info.id;
@@ -587,6 +640,8 @@ void MainWindow::render_effects_panel() {
                     }
                     clip->effects.push_back(new_effect);
                     active_effect = &clip->effects.back();
+                    execute_command(std::make_unique<ModifyClipCommand>(
+                        timeline_data_, clip->id, old_state, *clip, "Enable effect"));
                 } else if (!is_enabled && active_effect) {
                     std::string id_to_remove = effect_info.id;
                     clip->effects.erase(
@@ -598,6 +653,8 @@ void MainWindow::render_effects_panel() {
                     if (source && source->duration_seconds > 0) {
                         clip->duration_beats = project_.tempo().time_to_beats(source->duration_seconds);
                     }
+                    execute_command(std::make_unique<ModifyClipCommand>(
+                        timeline_data_, clip->id, old_state, *clip, "Disable effect"));
                 }
             }
 
@@ -623,16 +680,22 @@ void MainWindow::render_effects_panel() {
                         combo_items += '\0';
 
                         ImGui::PushItemWidth(100);
+                        int old_index = current_index;
                         if (ImGui::Combo(param.name.c_str(), &current_index, combo_items.c_str())) {
+                            TimelineClip old_state = *clip;
                             current_value = param.enum_values[current_index];
-                            dirty_ = true;
+                            execute_command(std::make_unique<ModifyClipCommand>(
+                                timeline_data_, clip->id, old_state, *clip, "Change effect parameter"));
                         }
                         ImGui::PopItemWidth();
                     } else if (param.type == "bool") {
                         bool checked = (current_value == "true");
+                        bool old_checked = checked;
                         if (ImGui::Checkbox(param.name.c_str(), &checked)) {
+                            TimelineClip old_state = *clip;
                             current_value = checked ? "true" : "false";
-                            dirty_ = true;
+                            execute_command(std::make_unique<ModifyClipCommand>(
+                                timeline_data_, clip->id, old_state, *clip, "Change effect parameter"));
                         }
                     } else if (param.type == "number") {
                         float value = 0.0f;
@@ -642,8 +705,9 @@ void MainWindow::render_effects_panel() {
                         ImGui::PushItemWidth(100);
                         if (ImGui::DragFloat(param.name.c_str(), &value, 0.1f)) {
                             current_value = std::to_string(value);
-                            dirty_ = true;
                         }
+                        if (ImGui::IsItemActive()) any_effect_drag_active = true;
+                        if (ImGui::IsItemDeactivatedAfterEdit()) any_effect_drag_deactivated = true;
                         ImGui::PopItemWidth();
                     }
                 }
@@ -655,6 +719,21 @@ void MainWindow::render_effects_panel() {
             ImGui::PopID();
         }
 
+        if (any_effect_drag_active && edit_mode_ == EditMode::None) {
+            edit_mode_ = EditMode::Effect;
+            property_edit_initial_state_ = *clip;
+        }
+
+        if (any_effect_drag_deactivated && edit_mode_ == EditMode::Effect) {
+            execute_command(std::make_unique<ModifyClipCommand>(
+                timeline_data_, clip->id, property_edit_initial_state_, *clip, "Change effect parameter"));
+            edit_mode_ = EditMode::None;
+        }
+
+        if (!any_effect_drag_active && edit_mode_ == EditMode::Effect) {
+            edit_mode_ = EditMode::None;
+        }
+
         if (available_effects.empty()) {
             ImGui::TextDisabled("No effects available");
         }
@@ -664,9 +743,8 @@ void MainWindow::render_effects_panel() {
     ImGui::Spacing();
 
     if (ImGui::Button("Delete Clip")) {
-        timeline_data_.remove_clip(selected_id);
+        execute_command(std::make_unique<RemoveClipCommand>(timeline_data_, selected_id));
         timeline_.clear_selection();
-        dirty_ = true;
     }
 
     ImGui::End();
@@ -855,6 +933,7 @@ bool MainWindow::load_project(const std::string& filepath) {
 
     current_project_path_ = filepath;
     transport_controls_.set_current_project_path(filepath);
+    command_history_.clear();
     dirty_ = false;
     return true;
 }
@@ -968,6 +1047,51 @@ void MainWindow::render_loading_modal() {
         ImGui::Text("%zu / %zu clips", cache_current_clip_, cache_total_clips_);
 
         ImGui::EndPopup();
+    }
+}
+
+void MainWindow::execute_command(std::unique_ptr<Command> cmd) {
+    command_history_.execute(std::move(cmd));
+    dirty_ = true;
+}
+
+void MainWindow::handle_keyboard_shortcuts() {
+    ImGuiIO& io = ImGui::GetIO();
+
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z) && !io.KeyShift) {
+        if (command_history_.can_undo()) {
+            command_history_.undo();
+            dirty_ = true;
+        }
+    }
+
+    if ((io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) ||
+        (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))) {
+        if (command_history_.can_redo()) {
+            command_history_.redo();
+            dirty_ = true;
+        }
+    }
+
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+        if (!current_project_path_.empty()) {
+            save_project(current_project_path_);
+        } else {
+            nfdu8char_t* out_path = nullptr;
+            nfdu8filteritem_t filters[] = {{"FURIOUS Project", "furious"}};
+            nfdsavedialogu8args_t args = {0};
+            args.filterList = filters;
+            args.filterCount = 1;
+            std::string default_name = project_.name() + ".furious";
+            args.defaultName = default_name.c_str();
+
+            if (NFD_SaveDialogU8_With(&out_path, &args) == NFD_OKAY) {
+                if (save_project(out_path)) {
+                    transport_controls_.set_current_project_path(out_path);
+                }
+                NFD_FreePathU8(out_path);
+            }
+        }
     }
 }
 

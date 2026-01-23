@@ -308,6 +308,16 @@ bool Timeline::consume_data_modified() {
     return was_modified;
 }
 
+bool Timeline::consume_clip_modification(TimelineClip& old_state, TimelineClip& new_state) {
+    if (!pending_clip_modification_) {
+        return false;
+    }
+    old_state = pending_clip_modification_->first;
+    new_state = pending_clip_modification_->second;
+    pending_clip_modification_.reset();
+    return true;
+}
+
 double Timeline::screen_x_to_beats(float screen_x, float canvas_x) const {
     float pixels_per_beat = 100.0f * zoom_;
     float relative_x = screen_x - canvas_x + scroll_offset_;
@@ -597,6 +607,7 @@ void Timeline::handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, fl
                     selected_clip_id_ = clip.id;
                     dragging_clip_id_ = clip.id;
                     dragging_clip_ = true;
+                    drag_initial_clip_state_ = clip;
                     drag_mode_ = DragMode::TrimLeft;
                     drag_initial_start_beat_ = clip.start_beat;
                     drag_initial_duration_ = clip.duration_beats;
@@ -609,6 +620,7 @@ void Timeline::handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, fl
                     selected_clip_id_ = clip.id;
                     dragging_clip_id_ = clip.id;
                     dragging_clip_ = true;
+                    drag_initial_clip_state_ = clip;
                     drag_mode_ = DragMode::TrimRight;
                     drag_initial_start_beat_ = clip.start_beat;
                     drag_initial_duration_ = clip.duration_beats;
@@ -620,6 +632,7 @@ void Timeline::handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, fl
                     selected_clip_id_ = clip.id;
                     dragging_clip_id_ = clip.id;
                     dragging_clip_ = true;
+                    drag_initial_clip_state_ = clip;
                     drag_mode_ = DragMode::Move;
                     drag_initial_start_beat_ = clip.start_beat;
                     drag_mouse_start_x_ = mouse_pos.x;
@@ -705,6 +718,15 @@ void Timeline::handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, fl
 
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         if (dragging_clip_) {
+            if (const TimelineClip* clip = timeline_data_->find_clip(dragging_clip_id_)) {
+                bool changed = clip->start_beat != drag_initial_clip_state_.start_beat ||
+                               clip->duration_beats != drag_initial_clip_state_.duration_beats ||
+                               clip->track_index != drag_initial_clip_state_.track_index ||
+                               clip->source_start_seconds != drag_initial_clip_state_.source_start_seconds;
+                if (changed) {
+                    pending_clip_modification_ = std::make_pair(drag_initial_clip_state_, *clip);
+                }
+            }
             data_modified_ = true;
         }
         dragging_clip_ = false;

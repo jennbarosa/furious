@@ -2,6 +2,7 @@
 
 #include "furious/core/project.hpp"
 #include "furious/core/timeline_data.hpp"
+#include "furious/core/command.hpp"
 #include "furious/ui/viewport.hpp"
 #include "furious/ui/timeline.hpp"
 #include "furious/ui/transport_controls.hpp"
@@ -45,6 +46,9 @@ public:
     [[nodiscard]] bool is_dirty() const { return dirty_; }
     void mark_dirty();
 
+    void execute_command(std::unique_ptr<Command> cmd);
+    [[nodiscard]] CommandHistory& command_history() { return command_history_; }
+
     void set_glfw_window(GLFWwindow* window) { glfw_window_ = window; }
 
 private:
@@ -59,6 +63,7 @@ private:
     VideoEngine video_engine_;
     ScriptEngine script_engine_;
     ProfilerWindow profiler_;
+    CommandHistory command_history_;
 
     bool first_frame_ = true;
     bool layout_loaded_ = false;
@@ -71,6 +76,10 @@ private:
     size_t cache_current_clip_ = 0;
     size_t cache_total_clips_ = 0;
 
+    enum class EditMode { None, Transform, Effect };
+    EditMode edit_mode_ = EditMode::None;
+    TimelineClip property_edit_initial_state_;
+
     void setup_dockspace();
     void build_default_layout(unsigned int dockspace_id);
     void render_audio_panel();
@@ -81,6 +90,7 @@ private:
     void cache_all_clips();
     void start_cache_building();
     bool cache_next_clip();
+    void handle_keyboard_shortcuts();
 };
 
 } // namespace furious

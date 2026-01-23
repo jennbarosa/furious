@@ -1,6 +1,7 @@
 #pragma once
 
 #include "furious/core/timeline_data.hpp"
+#include "furious/core/timeline_clip.hpp"
 #include "furious/video/video_engine.hpp"
 #include "furious/video/source_library.hpp"
 #include <cstdint>
@@ -8,6 +9,7 @@
 #include <vector>
 #include <unordered_map>
 #include <optional>
+#include <utility>
 
 namespace furious {
 
@@ -44,6 +46,8 @@ public:
     }
     void clear_transform_overrides() { transform_overrides_.clear(); }
 
+    [[nodiscard]] bool consume_clip_modification(TimelineClip& old_state, TimelineClip& new_state);
+
 private:
     float width_ = 1280.0f;
     float height_ = 720.0f;
@@ -57,6 +61,9 @@ private:
     std::string selected_clip_id_;
     std::string dragging_clip_id_;
     bool dragging_ = false;
+
+    TimelineClip drag_initial_clip_state_;
+    std::optional<std::pair<TimelineClip, TimelineClip>> pending_clip_modification_;
 
     std::unordered_map<std::string, ClipTransformOverride> transform_overrides_;
 };

@@ -171,6 +171,7 @@ void Viewport::render() {
                 selected_clip_id_ = clip->id;
                 dragging_clip_id_ = clip->id;
                 dragging_ = true;
+                drag_initial_clip_state_ = *clip;
                 break;
             }
         }
@@ -184,7 +185,15 @@ void Viewport::render() {
         }
     }
 
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && dragging_) {
+        if (timeline_data_) {
+            if (TimelineClip* clip = timeline_data_->find_clip(dragging_clip_id_)) {
+                if (clip->position_x != drag_initial_clip_state_.position_x ||
+                    clip->position_y != drag_initial_clip_state_.position_y) {
+                    pending_clip_modification_ = {drag_initial_clip_state_, *clip};
+                }
+            }
+        }
         dragging_ = false;
         dragging_clip_id_.clear();
     }
@@ -209,6 +218,16 @@ bool Viewport::consume_play_toggle_request() {
     bool was_requested = play_toggle_requested_;
     play_toggle_requested_ = false;
     return was_requested;
+}
+
+bool Viewport::consume_clip_modification(TimelineClip& old_state, TimelineClip& new_state) {
+    if (pending_clip_modification_) {
+        old_state = pending_clip_modification_->first;
+        new_state = pending_clip_modification_->second;
+        pending_clip_modification_.reset();
+        return true;
+    }
+    return false;
 }
 
 } // namespace furious

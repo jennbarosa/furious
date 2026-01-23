@@ -3,6 +3,7 @@
 #include "furious/core/project.hpp"
 #include "furious/core/timeline_data.hpp"
 #include "furious/video/source_library.hpp"
+#include <optional>
 #include <string>
 
 struct ImVec2;
@@ -46,6 +47,7 @@ public:
     [[nodiscard]] bool consume_play_toggle_request();
     [[nodiscard]] bool consume_delete_request(std::string& out_clip_id);
     [[nodiscard]] bool consume_data_modified();
+    [[nodiscard]] bool consume_clip_modification(TimelineClip& old_state, TimelineClip& new_state);
 
     void set_follow_playhead(bool follow) { follow_playhead_ = follow; }
     [[nodiscard]] bool follow_playhead() const { return follow_playhead_; }
@@ -94,6 +96,9 @@ private:
 
     bool show_remove_track_popup_ = false;
     size_t pending_remove_track_index_ = 0;
+
+    TimelineClip drag_initial_clip_state_;
+    std::optional<std::pair<TimelineClip, TimelineClip>> pending_clip_modification_;
 
     static constexpr float TRACK_HEIGHT = 32.0f;
     static constexpr float TRACK_SPACING = 2.0f;
