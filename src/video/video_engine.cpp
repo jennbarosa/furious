@@ -179,6 +179,7 @@ void VideoEngine::request_frame(const std::string& clip_id, const std::string& s
 
     ClipState& clip = clip_it->second;
     clip.requested_this_frame = true;
+    clip.use_loop_frame = false;
     impl_->active_clip_ids.insert(clip_id);
 
     double fps = source.decoder ? source.decoder->fps() : 30.0;
