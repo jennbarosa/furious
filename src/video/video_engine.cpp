@@ -26,7 +26,7 @@ struct ClipState {
     int height = 0;
     std::vector<uint8_t> frame_buffer;
     double last_requested_time = -1.0;
-    double last_decode_wall_time = 0.0;  
+    double last_decode_wall_time = 0.0;
     bool texture_needs_update = false;
     bool requested_this_frame = false;
     bool has_valid_frame = false;
@@ -35,9 +35,11 @@ struct ClipState {
     double loop_source_start = 0.0;
     double loop_duration = 0.0;
     double loop_frame_duration = 0.0;
-    double loop_next_decode_time = 0.0;  
+    double loop_next_decode_time = 0.0;
     bool loop_cache_complete = false;
     std::vector<std::vector<uint8_t>> loop_frames;
+    size_t current_loop_frame_index = 0; 
+    bool use_loop_frame = false;         
 };
 
 struct VideoEngine::Impl {
@@ -324,12 +326,14 @@ void VideoEngine::prebuild_loop_cache(const std::string& clip_id, const std::str
     clip.loop_next_decode_time = source_start_seconds;
     clip.loop_cache_complete = false;
 
-    std::vector<uint8_t> frame_buffer;
+    size_t buffer_size = static_cast<size_t>(source.width) * static_cast<size_t>(source.height) * 4;
+    std::vector<uint8_t> frame_buffer(buffer_size);
     double end_time = source_start_seconds + loop_duration_seconds + clip.loop_frame_duration;
 
     while (clip.loop_next_decode_time < end_time && clip.loop_frames.size() < 120) {
         if (source.decoder->seek_and_decode(clip.loop_next_decode_time, frame_buffer)) {
-            clip.loop_frames.push_back(frame_buffer);
+            clip.loop_frames.push_back(std::move(frame_buffer));
+            frame_buffer.resize(buffer_size);
         }
         clip.loop_next_decode_time += clip.loop_frame_duration;
     }
@@ -357,7 +361,8 @@ void VideoEngine::prebuild_loop_cache(const std::string& clip_id, const std::str
     }
 
     if (!clip.loop_frames.empty()) {
-        clip.frame_buffer = clip.loop_frames[0];
+        clip.current_loop_frame_index = 0;
+        clip.use_loop_frame = true;
         clip.has_valid_frame = true;
         clip.texture_needs_update = true;
     }
@@ -429,13 +434,15 @@ void VideoEngine::request_looped_frame(const std::string& clip_id, const std::st
         auto t_cache_start = std::chrono::high_resolution_clock::now();
         constexpr size_t MAX_FRAMES_PER_CALL = 5;
 
-        std::vector<uint8_t> frame_buffer;
+        size_t buffer_size = static_cast<size_t>(source.width) * static_cast<size_t>(source.height) * 4;
+        std::vector<uint8_t> frame_buffer(buffer_size);
         double end_time = clip.loop_source_start + clip.loop_duration + clip.loop_frame_duration;
         size_t frames_decoded = 0;
 
         while (clip.loop_next_decode_time < end_time && frames_decoded < MAX_FRAMES_PER_CALL) {
             if (source.decoder->seek_and_decode(clip.loop_next_decode_time, frame_buffer)) {
-                clip.loop_frames.push_back(frame_buffer);
+                clip.loop_frames.push_back(std::move(frame_buffer));
+                frame_buffer.resize(buffer_size);
             }
             clip.loop_next_decode_time += clip.loop_frame_duration;
             ++frames_decoded;
@@ -477,7 +484,8 @@ void VideoEngine::request_looped_frame(const std::string& clip_id, const std::st
     if (!clip.loop_frames.empty() && clip.loop_frame_duration > 0.0) {
         size_t index = static_cast<size_t>(position_in_loop / clip.loop_frame_duration);
         if (index >= clip.loop_frames.size()) index = clip.loop_frames.size() - 1;
-        clip.frame_buffer = clip.loop_frames[index];
+        clip.current_loop_frame_index = index;
+        clip.use_loop_frame = true;
         clip.texture_needs_update = true;
         clip.has_valid_frame = true;
     }
@@ -491,9 +499,21 @@ void VideoEngine::request_looped_frame(const std::string& clip_id, const std::st
 
 void VideoEngine::update() {
     for (auto& [id, clip] : impl_->clips) {
-        if (clip.texture_needs_update && !clip.frame_buffer.empty()) {
+        if (clip.texture_needs_update) {
+            const uint8_t* frame_data = nullptr;
+            size_t frame_size = 0;
+
+            if (clip.use_loop_frame && clip.current_loop_frame_index < clip.loop_frames.size()) {
+                const auto& cached_frame = clip.loop_frames[clip.current_loop_frame_index];
+                frame_data = cached_frame.data();
+                frame_size = cached_frame.size();
+            } else if (!clip.frame_buffer.empty()) {
+                frame_data = clip.frame_buffer.data();
+                frame_size = clip.frame_buffer.size();
+            }
+
             size_t expected_size = static_cast<size_t>(clip.width * clip.height * 4);
-            if (clip.frame_buffer.size() != expected_size) {
+            if (frame_data == nullptr || frame_size != expected_size) {
                 clip.texture_needs_update = false;
                 continue;
             }
@@ -502,7 +522,7 @@ void VideoEngine::update() {
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
                             clip.width, clip.height,
                             GL_RGBA, GL_UNSIGNED_BYTE,
-                            clip.frame_buffer.data());
+                            frame_data);
             glBindTexture(GL_TEXTURE_2D, 0);
             clip.texture_needs_update = false;
         }
