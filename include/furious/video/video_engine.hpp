@@ -49,6 +49,9 @@ public:
     void set_playing(bool playing);
     [[nodiscard]] bool is_playing() const { return is_playing_; }
 
+    void set_interactive_mode(bool interactive);
+    [[nodiscard]] bool is_interactive_mode() const { return is_interactive_; }
+
     void update();
 
     [[nodiscard]] std::string get_active_decoder_info() const;
@@ -58,6 +61,7 @@ private:
     std::unique_ptr<Impl> impl_;
 
     std::atomic<bool> is_playing_{false};
+    std::atomic<bool> is_interactive_{false};
 };
 
 } // namespace furious

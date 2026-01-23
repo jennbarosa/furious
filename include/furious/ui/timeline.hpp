@@ -44,6 +44,7 @@ public:
     [[nodiscard]] double screen_x_to_beats(float screen_x, float canvas_x) const;
 
     [[nodiscard]] bool is_seeking() const { return is_seeking_; }
+    [[nodiscard]] bool is_dragging_clip() const { return dragging_clip_; }
     [[nodiscard]] bool consume_play_toggle_request();
     [[nodiscard]] bool consume_delete_request(std::string& out_clip_id);
     [[nodiscard]] bool consume_data_modified();

@@ -129,6 +129,7 @@ void MainWindow::render() {
 
     auto t2 = std::chrono::high_resolution_clock::now();
 
+    video_engine_.set_interactive_mode(timeline_.is_dragging_clip());
     video_engine_.begin_frame();
     sync_video_to_playhead();
     video_engine_.update();

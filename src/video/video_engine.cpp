@@ -418,6 +418,10 @@ void VideoEngine::request_looped_frame(const std::string& clip_id, const std::st
     bool params_changed = (clip.loop_source_start != source_start_seconds) ||
                           (clip.loop_duration != loop_duration_seconds);
 
+    if (is_interactive_ && params_changed) {
+        return;
+    }
+
     if (params_changed) {
         double fps = source.decoder->fps();
         if (fps <= 0.0) fps = 30.0;
@@ -576,6 +580,10 @@ double VideoEngine::get_source_fps(const std::string& source_id) const {
 
 void VideoEngine::set_playing(bool playing) {
     is_playing_ = playing;
+}
+
+void VideoEngine::set_interactive_mode(bool interactive) {
+    is_interactive_ = interactive;
 }
 
 std::string VideoEngine::get_active_decoder_info() const {
