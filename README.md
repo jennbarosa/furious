@@ -14,6 +14,9 @@ to be as uninterrupted and smooth as possible, while being able to handle a bunc
 furious comes with an effects engine, with **Lua scripting support!** All the clip effects are loaded from the effect scripts folder at runtime. Right now Lua is used mainly for effects, but I eventually
 want to let it do **anything** in the application.
 
+<img width="700" height="600" alt="image" src="https://github.com/user-attachments/assets/159f7f05-ed2c-491f-acba-2f2114cedbba" />
+
+
 ### Development Warning
 furious is in **very early development.** There are a lot of issues that I'm aware of, and a ton more that I'm not aware of. A lot of things may need to be reworked or changed completely. The current state of FURIOUS is purely a proof of concept and not intended to be a final product.
 
