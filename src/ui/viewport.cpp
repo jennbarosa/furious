@@ -54,6 +54,9 @@ void Viewport::render() {
             float position_x = clip->position_x;
             float position_y = clip->position_y;
 
+            bool flip_h = false;
+            bool flip_v = false;
+
             auto override_it = transform_overrides_.find(clip->id);
             if (override_it != transform_overrides_.end()) {
                 const auto& ovr = override_it->second;
@@ -62,6 +65,8 @@ void Viewport::render() {
                 if (ovr.rotation.has_value()) rotation = ovr.rotation.value();
                 if (ovr.position_x.has_value()) position_x = ovr.position_x.value();
                 if (ovr.position_y.has_value()) position_y = ovr.position_y.value();
+                if (ovr.flip_h.has_value()) flip_h = ovr.flip_h.value();
+                if (ovr.flip_v.has_value()) flip_v = ovr.flip_v.value();
             }
 
             float scaled_w = static_cast<float>(tex_w) * std::fabs(scale_x);
@@ -75,11 +80,14 @@ void Viewport::render() {
             ImVec2 uv_br(1, 1);
             ImVec2 uv_bl(0, 1);
 
-            if (scale_x < 0) {
+            bool do_flip_h = (scale_x < 0) != flip_h;
+            bool do_flip_v = (scale_y < 0) != flip_v;
+
+            if (do_flip_h) {
                 std::swap(uv_tl.x, uv_tr.x);
                 std::swap(uv_bl.x, uv_br.x);
             }
-            if (scale_y < 0) {
+            if (do_flip_v) {
                 std::swap(uv_tl.y, uv_bl.y);
                 std::swap(uv_tr.y, uv_br.y);
             }

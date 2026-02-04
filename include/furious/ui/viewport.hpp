@@ -19,6 +19,8 @@ struct ClipTransformOverride {
     std::optional<float> rotation;
     std::optional<float> position_x;
     std::optional<float> position_y;
+    std::optional<bool> flip_h;
+    std::optional<bool> flip_v;
 };
 
 class Viewport {
