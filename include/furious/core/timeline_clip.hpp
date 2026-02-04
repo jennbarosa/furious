@@ -1,5 +1,6 @@
 #pragma once
 
+#include "furious/core/pattern.hpp"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -28,6 +29,7 @@ struct TimelineClip {
     float rotation = 0.0f;
 
     std::vector<ClipEffect> effects;
+    std::vector<ClipPatternReference> patterns;
 
     [[nodiscard]] double end_beat() const { return start_beat + duration_beats; }
 
