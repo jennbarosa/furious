@@ -68,6 +68,87 @@ ClipEffect json_to_effect(const nlohmann::json& j) {
     return effect;
 }
 
+std::string property_to_string(PatternTargetProperty prop) {
+    switch (prop) {
+        case PatternTargetProperty::PositionX: return "position_x";
+        case PatternTargetProperty::PositionY: return "position_y";
+        case PatternTargetProperty::ScaleX: return "scale_x";
+        case PatternTargetProperty::ScaleY: return "scale_y";
+        case PatternTargetProperty::Rotation: return "rotation";
+        case PatternTargetProperty::FlipH: return "flip_h";
+        case PatternTargetProperty::FlipV: return "flip_v";
+    }
+    return "scale_x";
+}
+
+PatternTargetProperty string_to_property(const std::string& str) {
+    if (str == "position_x") return PatternTargetProperty::PositionX;
+    if (str == "position_y") return PatternTargetProperty::PositionY;
+    if (str == "scale_x") return PatternTargetProperty::ScaleX;
+    if (str == "scale_y") return PatternTargetProperty::ScaleY;
+    if (str == "rotation") return PatternTargetProperty::Rotation;
+    if (str == "flip_h") return PatternTargetProperty::FlipH;
+    if (str == "flip_v") return PatternTargetProperty::FlipV;
+    return PatternTargetProperty::ScaleX;
+}
+
+nlohmann::json trigger_to_json(const PatternTrigger& trigger) {
+    nlohmann::json j;
+    j["subdivision_index"] = trigger.subdivision_index;
+    j["target_property"] = property_to_string(trigger.target);
+    j["value"] = trigger.value;
+    return j;
+}
+
+PatternTrigger json_to_trigger(const nlohmann::json& j) {
+    PatternTrigger trigger;
+    trigger.subdivision_index = j.value("subdivision_index", 0);
+    trigger.target = string_to_property(j.value("target_property", "scale_x"));
+    trigger.value = j.value("value", 1.0f);
+    return trigger;
+}
+
+nlohmann::json pattern_to_json(const Pattern& pattern) {
+    nlohmann::json j;
+    j["id"] = pattern.id;
+    j["name"] = pattern.name;
+    j["length_subdivisions"] = pattern.length_subdivisions;
+    j["triggers"] = nlohmann::json::array();
+    for (const auto& trigger : pattern.triggers) {
+        j["triggers"].push_back(trigger_to_json(trigger));
+    }
+    return j;
+}
+
+Pattern json_to_pattern(const nlohmann::json& j) {
+    Pattern pattern;
+    pattern.id = j.value("id", "");
+    pattern.name = j.value("name", "Pattern");
+    pattern.length_subdivisions = j.value("length_subdivisions", 16);
+    if (j.contains("triggers") && j["triggers"].is_array()) {
+        for (const auto& t : j["triggers"]) {
+            pattern.triggers.push_back(json_to_trigger(t));
+        }
+    }
+    return pattern;
+}
+
+nlohmann::json pattern_ref_to_json(const ClipPatternReference& ref) {
+    nlohmann::json j;
+    j["pattern_id"] = ref.pattern_id;
+    j["enabled"] = ref.enabled;
+    j["offset_subdivisions"] = ref.offset_subdivisions;
+    return j;
+}
+
+ClipPatternReference json_to_pattern_ref(const nlohmann::json& j) {
+    ClipPatternReference ref;
+    ref.pattern_id = j.value("pattern_id", "");
+    ref.enabled = j.value("enabled", true);
+    ref.offset_subdivisions = j.value("offset_subdivisions", 0);
+    return ref;
+}
+
 nlohmann::json clip_to_json(const TimelineClip& clip) {
     nlohmann::json j;
     j["id"] = clip.id;
@@ -86,6 +167,13 @@ nlohmann::json clip_to_json(const TimelineClip& clip) {
         j["effects"] = nlohmann::json::array();
         for (const auto& effect : clip.effects) {
             j["effects"].push_back(effect_to_json(effect));
+        }
+    }
+
+    if (!clip.patterns.empty()) {
+        j["patterns"] = nlohmann::json::array();
+        for (const auto& ref : clip.patterns) {
+            j["patterns"].push_back(pattern_ref_to_json(ref));
         }
     }
 
@@ -109,6 +197,12 @@ TimelineClip json_to_clip(const nlohmann::json& j) {
     if (j.contains("effects") && j["effects"].is_array()) {
         for (const auto& effect_json : j["effects"]) {
             clip.effects.push_back(json_to_effect(effect_json));
+        }
+    }
+
+    if (j.contains("patterns") && j["patterns"].is_array()) {
+        for (const auto& ref_json : j["patterns"]) {
+            clip.patterns.push_back(json_to_pattern_ref(ref_json));
         }
     }
 
@@ -156,6 +250,11 @@ bool ProjectData::save_to_file(const std::string& filepath) const {
     j["clips"] = nlohmann::json::array();
     for (const auto& clip : clips) {
         j["clips"].push_back(clip_to_json(clip));
+    }
+
+    j["patterns"] = nlohmann::json::array();
+    for (const auto& pattern : patterns) {
+        j["patterns"].push_back(pattern_to_json(pattern));
     }
 
     std::ofstream file(filepath);
@@ -227,6 +326,7 @@ bool ProjectData::load_from_file(const std::string& filepath, ProjectData& out_d
     out_data.sources.clear();
     out_data.tracks.clear();
     out_data.clips.clear();
+    out_data.patterns.clear();
 
     if (j.contains("sources") && j["sources"].is_array()) {
         for (const auto& src_json : j["sources"]) {
@@ -243,6 +343,12 @@ bool ProjectData::load_from_file(const std::string& filepath, ProjectData& out_d
     if (j.contains("clips") && j["clips"].is_array()) {
         for (const auto& clip_json : j["clips"]) {
             out_data.clips.push_back(json_to_clip(clip_json));
+        }
+    }
+
+    if (j.contains("patterns") && j["patterns"].is_array()) {
+        for (const auto& pattern_json : j["patterns"]) {
+            out_data.patterns.push_back(json_to_pattern(pattern_json));
         }
     }
 
