@@ -1,6 +1,7 @@
 #include "furious/ui/main_window.hpp"
 #include "furious/core/project_data.hpp"
 #include "furious/core/clip_commands.hpp"
+#include "furious/core/pattern_commands.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <GLFW/glfw3.h>
@@ -30,6 +31,14 @@ MainWindow::MainWindow()
     viewport_.set_video_engine(&video_engine_);
     viewport_.set_timeline_data(&timeline_data_);
     viewport_.set_source_library(&source_library_);
+
+    patterns_window_.set_pattern_library(&pattern_library_);
+    patterns_window_.set_tempo(&project_.tempo());
+    patterns_window_.set_command_callback([this](std::unique_ptr<Command> cmd) {
+        execute_command(std::move(cmd));
+    });
+
+    pattern_evaluator_.set_pattern_library(&pattern_library_);
 }
 
 MainWindow::~MainWindow() {
@@ -142,6 +151,7 @@ void MainWindow::render() {
     render_audio_panel();
     render_sources_panel();
     render_effects_panel();
+    patterns_window_.render();
 
     auto t4 = std::chrono::high_resolution_clock::now();
 
@@ -221,6 +231,8 @@ void MainWindow::sync_video_to_playhead() {
     for (TimelineClip* clip : active_clips) {
         double clip_local_beats = current_beats - clip->start_beat;
 
+        PatternEvaluationResult pattern_result = pattern_evaluator_.evaluate(*clip, clip_local_beats);
+
         const std::vector<ClipEffect>& effects = clip->effects;
 
         if (!effects.empty()) {
@@ -232,15 +244,19 @@ void MainWindow::sync_video_to_playhead() {
 
             EffectResult result = script_engine_.evaluate_effects(effects, context);
 
-            if (result.scale_x.has_value() || result.scale_y.has_value() ||
-                result.rotation.has_value() || result.position_x.has_value() ||
-                result.position_y.has_value()) {
-                ClipTransformOverride override;
-                override.scale_x = result.scale_x;
-                override.scale_y = result.scale_y;
-                override.rotation = result.rotation;
-                override.position_x = result.position_x;
-                override.position_y = result.position_y;
+            ClipTransformOverride override;
+            override.position_x = result.position_x.has_value() ? result.position_x : pattern_result.position_x;
+            override.position_y = result.position_y.has_value() ? result.position_y : pattern_result.position_y;
+            override.scale_x = result.scale_x.has_value() ? result.scale_x : pattern_result.scale_x;
+            override.scale_y = result.scale_y.has_value() ? result.scale_y : pattern_result.scale_y;
+            override.rotation = result.rotation.has_value() ? result.rotation : pattern_result.rotation;
+            override.flip_h = pattern_result.flip_h;
+            override.flip_v = pattern_result.flip_v;
+
+            if (override.scale_x.has_value() || override.scale_y.has_value() ||
+                override.rotation.has_value() || override.position_x.has_value() ||
+                override.position_y.has_value() || override.flip_h.has_value() ||
+                override.flip_v.has_value()) {
                 viewport_.set_clip_transform_override(clip->id, override);
             }
 
@@ -261,6 +277,21 @@ void MainWindow::sync_video_to_playhead() {
                 video_engine_.request_frame(clip->id, clip->source_id, clip_local_seconds);
             }
         } else {
+            if (pattern_result.scale_x.has_value() || pattern_result.scale_y.has_value() ||
+                pattern_result.rotation.has_value() || pattern_result.position_x.has_value() ||
+                pattern_result.position_y.has_value() || pattern_result.flip_h.has_value() ||
+                pattern_result.flip_v.has_value()) {
+                ClipTransformOverride override;
+                override.position_x = pattern_result.position_x;
+                override.position_y = pattern_result.position_y;
+                override.scale_x = pattern_result.scale_x;
+                override.scale_y = pattern_result.scale_y;
+                override.rotation = pattern_result.rotation;
+                override.flip_h = pattern_result.flip_h;
+                override.flip_v = pattern_result.flip_v;
+                viewport_.set_clip_transform_override(clip->id, override);
+            }
+
             double clip_local_seconds = project_.tempo().beats_to_time(clip_local_beats);
             clip_local_seconds += clip->source_start_seconds;
 
@@ -324,6 +355,7 @@ void MainWindow::build_default_layout(ImGuiID dockspace_id) {
     ImGui::DockBuilderDockWindow("Sources", dock_right);
     ImGui::DockBuilderDockWindow("Audio", dock_right);
     ImGui::DockBuilderDockWindow("Clip", dock_right);
+    ImGui::DockBuilderDockWindow("Patterns", dock_right);
     ImGui::DockBuilderDockWindow("Profiler", dock_right);
     ImGui::DockBuilderDockWindow("Project", dock_right);
 
@@ -344,6 +376,10 @@ VideoEngine& MainWindow::video_engine() {
 
 SourceLibrary& MainWindow::source_library() {
     return source_library_;
+}
+
+PatternLibrary& MainWindow::pattern_library() {
+    return pattern_library_;
 }
 
 TimelineData& MainWindow::timeline_data() {
@@ -740,6 +776,73 @@ void MainWindow::render_effects_panel() {
         }
     }
 
+    if (ImGui::CollapsingHeader("Patterns", ImGuiTreeNodeFlags_DefaultOpen)) {
+        static char pattern_search_buf[128] = {};
+        ImGui::InputTextWithHint("##pattern_search", "Search patterns...", pattern_search_buf, sizeof(pattern_search_buf));
+        std::string search_filter(pattern_search_buf);
+
+        ImGui::Text("Applied:");
+        if (clip->patterns.empty()) {
+            ImGui::TextDisabled("  (none)");
+        } else {
+            for (size_t i = 0; i < clip->patterns.size(); ++i) {
+                auto& ref = clip->patterns[i];
+                const Pattern* pattern = pattern_library_.find_pattern(ref.pattern_id);
+                if (!pattern) continue;
+
+                ImGui::PushID(static_cast<int>(i));
+
+                bool enabled = ref.enabled;
+                if (ImGui::Checkbox("##enabled", &enabled)) {
+                    TimelineClip old_state = *clip;
+                    ref.enabled = enabled;
+                    execute_command(std::make_unique<ModifyClipCommand>(
+                        timeline_data_, clip->id, old_state, *clip, "Toggle pattern"));
+                }
+                ImGui::SameLine();
+                ImGui::Text("%s", pattern->name.c_str());
+                ImGui::SameLine();
+                if (ImGui::SmallButton("X")) {
+                    execute_command(std::make_unique<ToggleClipPatternCommand>(
+                        timeline_data_, clip->id, ref.pattern_id, false));
+                }
+
+                ImGui::PopID();
+            }
+        }
+
+        ImGui::Separator();
+        ImGui::Text("Add Pattern:");
+
+        for (const auto& pattern : pattern_library_.patterns()) {
+            bool already_applied = std::ranges::any_of(clip->patterns,
+                [&](const ClipPatternReference& r) { return r.pattern_id == pattern.id; });
+
+            if (already_applied) continue;
+
+            if (!search_filter.empty()) {
+                std::string name_lower = pattern.name;
+                std::string filter_lower = search_filter;
+                std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+                std::transform(filter_lower.begin(), filter_lower.end(), filter_lower.begin(), ::tolower);
+                if (name_lower.find(filter_lower) == std::string::npos) continue;
+            }
+
+            ImGui::PushID(pattern.id.c_str());
+            if (ImGui::SmallButton("+")) {
+                execute_command(std::make_unique<ToggleClipPatternCommand>(
+                    timeline_data_, clip->id, pattern.id, true));
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s", pattern.name.c_str());
+            ImGui::PopID();
+        }
+
+        if (pattern_library_.patterns().empty()) {
+            ImGui::TextDisabled("No patterns available. Create one in the Patterns window.");
+        }
+    }
+
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -855,6 +958,7 @@ bool MainWindow::save_project(const std::string& filepath) {
     data.sources = source_library_.sources();
     data.tracks = timeline_data_.tracks();
     data.clips = timeline_data_.clips();
+    data.patterns = pattern_library_.patterns();
 
     if (glfw_window_) {
         glfwGetWindowSize(glfw_window_, &data.window_width, &data.window_height);
@@ -909,6 +1013,11 @@ bool MainWindow::load_project(const std::string& filepath) {
         timeline_data_.add_track("Track 1");
     }
     timeline_data_.set_clips(data.clips);
+
+    pattern_library_.clear();
+    for (const auto& pattern : data.patterns) {
+        pattern_library_.add_pattern(pattern);
+    }
 
     timeline_.set_playhead_position(data.playhead_beat);
     timeline_.set_zoom(data.timeline_zoom);

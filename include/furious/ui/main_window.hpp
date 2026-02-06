@@ -3,10 +3,13 @@
 #include "furious/core/project.hpp"
 #include "furious/core/timeline_data.hpp"
 #include "furious/core/command.hpp"
+#include "furious/core/pattern_library.hpp"
+#include "furious/core/pattern_evaluator.hpp"
 #include "furious/ui/viewport.hpp"
 #include "furious/ui/timeline.hpp"
 #include "furious/ui/transport_controls.hpp"
 #include "furious/ui/profiler_window.hpp"
+#include "furious/ui/patterns_window.hpp"
 #include "furious/audio/audio_engine.hpp"
 #include "furious/video/video_engine.hpp"
 #include "furious/video/source_library.hpp"
@@ -28,6 +31,7 @@ public:
     [[nodiscard]] AudioEngine& audio_engine();
     [[nodiscard]] VideoEngine& video_engine();
     [[nodiscard]] SourceLibrary& source_library();
+    [[nodiscard]] PatternLibrary& pattern_library();
     [[nodiscard]] TimelineData& timeline_data();
     [[nodiscard]] Timeline& timeline();
     [[nodiscard]] TransportControls& transport_controls();
@@ -56,6 +60,7 @@ private:
     Project project_;
     TimelineData timeline_data_;
     SourceLibrary source_library_;
+    PatternLibrary pattern_library_;
     Viewport viewport_;
     Timeline timeline_;
     TransportControls transport_controls_;
@@ -63,6 +68,8 @@ private:
     VideoEngine video_engine_;
     ScriptEngine script_engine_;
     ProfilerWindow profiler_;
+    PatternsWindow patterns_window_;
+    PatternEvaluator pattern_evaluator_;
     CommandHistory command_history_;
 
     bool first_frame_ = true;
