@@ -1,6 +1,7 @@
 #pragma once
 
 #include "furious/core/media_source.hpp"
+#include "furious/core/pattern.hpp"
 #include "furious/core/tempo.hpp"
 #include "furious/core/timeline_clip.hpp"
 #include "furious/core/track.hpp"
@@ -29,10 +30,10 @@ struct ProjectData {
     double clip_start_seconds = 0.0;
     double clip_end_seconds = 0.0;
 
-    // Timeline data
     std::vector<MediaSource> sources;
     std::vector<Track> tracks;
     std::vector<TimelineClip> clips;
+    std::vector<Pattern> patterns;
 
     [[nodiscard]] bool save_to_file(const std::string& filepath) const;
     [[nodiscard]] static bool load_from_file(const std::string& filepath, ProjectData& out_data);
