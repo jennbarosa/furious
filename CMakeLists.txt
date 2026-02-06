@@ -188,11 +188,15 @@ add_library(furious_lib STATIC
     src/ui/timeline.cpp
     src/ui/transport_controls.cpp
     src/ui/profiler_window.cpp
+    src/ui/patterns_window.cpp
     src/core/project.cpp
     src/core/project_data.cpp
     src/core/tempo.cpp
     src/core/timeline_data.cpp
     src/core/command.cpp
+    src/core/pattern.cpp
+    src/core/pattern_library.cpp
+    src/core/pattern_evaluator.cpp
     src/audio/audio_clip.cpp
     src/audio/audio_engine.cpp
     src/video/source_library.cpp
@@ -275,11 +279,15 @@ if(BUILD_INTEGRATION_TESTS)
         src/ui/timeline.cpp
         src/ui/transport_controls.cpp
         src/ui/profiler_window.cpp
+        src/ui/patterns_window.cpp
         src/core/project.cpp
         src/core/project_data.cpp
         src/core/tempo.cpp
         src/core/timeline_data.cpp
         src/core/command.cpp
+        src/core/pattern.cpp
+        src/core/pattern_library.cpp
+        src/core/pattern_evaluator.cpp
         src/audio/audio_clip.cpp
         src/audio/audio_engine.cpp
         src/video/source_library.cpp
