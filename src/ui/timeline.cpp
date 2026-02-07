@@ -706,6 +706,16 @@ void Timeline::handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, fl
                     double new_duration = new_end_beat - drag_initial_start_beat_;
                     new_duration = std::max(MIN_CLIP_DURATION, new_duration);
 
+                    if (source_library_) {
+                        if (const MediaSource* source = source_library_->find_source(clip->source_id)) {
+                            if (source->type == MediaType::Video && source->duration_seconds > 0.0) {
+                                double remaining_source_seconds = source->duration_seconds - clip->source_start_seconds;
+                                double max_duration_beats = project_.tempo().time_to_beats(remaining_source_seconds);
+                                new_duration = std::min(new_duration, max_duration_beats);
+                            }
+                        }
+                    }
+
                     clip->duration_beats = new_duration;
                     break;
                 }
