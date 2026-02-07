@@ -258,7 +258,7 @@ if(BUILD_TESTS)
 
     add_custom_target(check
         COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-        DEPENDS furious_tests
+        DEPENDS furious_tests furious_integration_tests
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Running tests..."
     )
