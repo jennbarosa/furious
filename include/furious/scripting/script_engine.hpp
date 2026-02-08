@@ -33,6 +33,10 @@ struct EffectResult {
     double loop_duration_seconds = 0.0;
     double position_in_loop_seconds = 0.0;
 
+    bool use_looped_audio = false;
+    double audio_loop_start_seconds = 0.0;
+    double audio_loop_duration_seconds = 0.0;
+
     std::optional<float> position_x;
     std::optional<float> position_y;
     std::optional<float> scale_x;

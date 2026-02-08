@@ -34,6 +34,9 @@ function evaluate(context, params)
         loop_start_seconds = context.clip.source_start_seconds,
         loop_duration_seconds = period_seconds,
         position_in_loop_seconds = position_seconds,
+        use_looped_audio = true,
+        audio_loop_start_seconds = context.clip.source_start_seconds,
+        audio_loop_duration_seconds = period_seconds,
         scale_x = scale_x,
         scale_y = scale_y
     }
