@@ -18,6 +18,8 @@ void RegisterClipTests(ImGuiTestEngine* engine);
 void RegisterSyncTests(ImGuiTestEngine* engine);
 void RegisterUserFlowTests(ImGuiTestEngine* engine);
 void RegisterUndoRedoTests(ImGuiTestEngine* engine);
+void RegisterPatternTests(ImGuiTestEngine* engine);
+void RegisterAudioEngineTests(ImGuiTestEngine* engine);
 
 namespace {
 
@@ -127,6 +129,8 @@ int main(int argc, char** argv) {
     RegisterSyncTests(engine);
     RegisterUserFlowTests(engine);
     RegisterUndoRedoTests(engine);
+    RegisterPatternTests(engine);
+    RegisterAudioEngineTests(engine);
 
     ImGuiTestEngine_Start(engine, ImGui::GetCurrentContext());
     ImGuiTestEngine_InstallDefaultCrashHandler();

@@ -247,6 +247,10 @@ EffectResult ScriptEngine::evaluate_effect(
             result.loop_duration_seconds = result_table["loop_duration_seconds"].get_or(0.0);
             result.position_in_loop_seconds = result_table["position_in_loop_seconds"].get_or(0.0);
 
+            result.use_looped_audio = result_table["use_looped_audio"].get_or(false);
+            result.audio_loop_start_seconds = result_table["audio_loop_start_seconds"].get_or(0.0);
+            result.audio_loop_duration_seconds = result_table["audio_loop_duration_seconds"].get_or(0.0);
+
             if (result_table["position_x"].valid()) {
                 result.position_x = result_table["position_x"].get<float>();
             }
@@ -298,6 +302,12 @@ EffectResult ScriptEngine::evaluate_effects(
             combined.loop_start_seconds = effect_result.loop_start_seconds;
             combined.loop_duration_seconds = effect_result.loop_duration_seconds;
             combined.position_in_loop_seconds = effect_result.position_in_loop_seconds;
+        }
+
+        if (effect_result.use_looped_audio) {
+            combined.use_looped_audio = true;
+            combined.audio_loop_start_seconds = effect_result.audio_loop_start_seconds;
+            combined.audio_loop_duration_seconds = effect_result.audio_loop_duration_seconds;
         }
 
         if (effect_result.position_x) {

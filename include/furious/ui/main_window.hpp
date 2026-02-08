@@ -94,6 +94,7 @@ private:
     void render_effects_panel();
     void render_loading_modal();
     void sync_video_to_playhead();
+    void sync_audio_to_playhead();
     void cache_all_clips();
     void start_cache_building();
     bool cache_next_clip();

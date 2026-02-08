@@ -1,4 +1,6 @@
 #include "furious/video/source_library.hpp"
+#include "furious/audio/audio_decoder.hpp"
+#include "furious/audio/audio_buffer.hpp"
 #include <algorithm>
 #include <random>
 #include <sstream>
@@ -19,6 +21,14 @@ std::string SourceLibrary::add_source(const std::string& filepath) {
     if (source.type == MediaType::Image) {
         source.duration_seconds = 0.0;
         source.fps = 0.0;
+    } else if (source.type == MediaType::Video) {
+        AudioDecoder audio_decoder;
+        if (audio_decoder.open(filepath).has_value() && audio_decoder.has_audio_stream()) {
+            auto result = audio_decoder.extract_all();
+            if (result.has_value()) {
+                source.audio_buffer = std::make_shared<const AudioBuffer>(std::move(*result));
+            }
+        }
     }
 
     sources_.push_back(source);
@@ -26,7 +36,19 @@ std::string SourceLibrary::add_source(const std::string& filepath) {
 }
 
 void SourceLibrary::add_source_direct(const MediaSource& source) {
-    sources_.push_back(source);
+    MediaSource new_source = source;
+
+    if (new_source.type == MediaType::Video && !new_source.audio_buffer) {
+        AudioDecoder audio_decoder;
+        if (audio_decoder.open(new_source.filepath).has_value() && audio_decoder.has_audio_stream()) {
+            auto result = audio_decoder.extract_all();
+            if (result.has_value()) {
+                new_source.audio_buffer = std::make_shared<const AudioBuffer>(std::move(*result));
+            }
+        }
+    }
+
+    sources_.push_back(std::move(new_source));
 }
 
 void SourceLibrary::remove_source(std::string_view source_id) {

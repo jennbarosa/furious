@@ -15,6 +15,11 @@ struct PatternEvaluationResult {
     std::optional<float> rotation;
     std::optional<bool> flip_h;
     std::optional<bool> flip_v;
+    bool restart_clip = false;
+
+    bool use_looped_playback = false;
+    double loop_duration_beats = 0.0;
+    double position_in_loop_beats = 0.0;
 };
 
 class PatternEvaluator {
