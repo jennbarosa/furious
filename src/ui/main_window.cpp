@@ -90,48 +90,29 @@ void MainWindow::render() {
     }
 
     bool is_seeking = timeline_.is_seeking();
-    bool use_audio_engine = has_audio || metronome_enabled;
 
-    if (use_audio_engine) {
-        if (is_seeking) {
-            double current_seconds = project_.tempo().beats_to_time(timeline_.playhead_position());
-            audio_engine_.set_playhead_seconds(current_seconds);
-            if (!audio_engine_.is_playing()) {
-                audio_engine_.play();
-            }
-        } else if (is_playing) {
-            if (!audio_engine_.is_playing()) {
-                double trimmed_duration = audio_engine_.trimmed_duration_seconds();
-                double current_pos = audio_engine_.playhead_seconds();
-                bool at_end = trimmed_duration > 0.0 && current_pos >= trimmed_duration - 0.01;
-
-                if (at_end) {
-                    if (transport_controls_.loop_enabled()) {
-                        audio_engine_.set_playhead_seconds(0.0);
-                        audio_engine_.play();
-                    } else {
-                        transport_controls_.set_playing(false);
-                    }
-                } else {
-                    audio_engine_.play();
-                }
-            }
-            double audio_seconds = audio_engine_.playhead_seconds();
-            double audio_beats = project_.tempo().time_to_beats(audio_seconds);
-            timeline_.set_playhead_position(audio_beats);
-        } else {
-            if (audio_engine_.is_playing()) {
-                audio_engine_.pause();
-            }
-            double current_beats = timeline_.playhead_position();
-            if (current_beats != last_playhead_beats_) {
-                double current_seconds = project_.tempo().beats_to_time(current_beats);
-                audio_engine_.set_playhead_seconds(current_seconds);
-            }
+    if (is_seeking) {
+        double current_seconds = project_.tempo().beats_to_time(timeline_.playhead_position());
+        audio_engine_.set_playhead_seconds(current_seconds);
+        if (!audio_engine_.is_playing()) {
+            audio_engine_.play();
         }
+    } else if (is_playing) {
+        if (!audio_engine_.is_playing()) {
+            audio_engine_.play();
+        }
+        double audio_seconds = audio_engine_.playhead_seconds();
+        double audio_beats = project_.tempo().time_to_beats(audio_seconds);
+        timeline_.set_playhead_position(audio_beats);
     } else {
-        double delta_time = static_cast<double>(ImGui::GetIO().DeltaTime);
-        timeline_.update(delta_time, is_playing);
+        if (audio_engine_.is_playing()) {
+            audio_engine_.pause();
+        }
+        double current_beats = timeline_.playhead_position();
+        if (current_beats != last_playhead_beats_) {
+            double current_seconds = project_.tempo().beats_to_time(current_beats);
+            audio_engine_.set_playhead_seconds(current_seconds);
+        }
     }
 
     last_playhead_beats_ = timeline_.playhead_position();
@@ -141,6 +122,7 @@ void MainWindow::render() {
     video_engine_.set_interactive_mode(timeline_.is_dragging_clip());
     video_engine_.begin_frame();
     sync_video_to_playhead();
+    sync_audio_to_playhead();
     video_engine_.update();
 
     auto t3 = std::chrono::high_resolution_clock::now();
@@ -265,6 +247,12 @@ void MainWindow::sync_video_to_playhead() {
                                                    result.loop_start_seconds,
                                                    result.loop_duration_seconds,
                                                    result.position_in_loop_seconds);
+            } else if (pattern_result.use_looped_playback) {
+                double loop_start = clip->source_start_seconds;
+                double loop_duration = project_.tempo().beats_to_time(pattern_result.loop_duration_beats);
+                double position_in_loop = project_.tempo().beats_to_time(pattern_result.position_in_loop_beats);
+                video_engine_.request_looped_frame(clip->id, clip->source_id,
+                                                   loop_start, loop_duration, position_in_loop);
             } else {
                 double clip_local_seconds = project_.tempo().beats_to_time(clip_local_beats);
                 clip_local_seconds += clip->source_start_seconds;
@@ -292,15 +280,23 @@ void MainWindow::sync_video_to_playhead() {
                 viewport_.set_clip_transform_override(clip->id, override);
             }
 
-            double clip_local_seconds = project_.tempo().beats_to_time(clip_local_beats);
-            clip_local_seconds += clip->source_start_seconds;
+            if (pattern_result.use_looped_playback) {
+                double loop_start = clip->source_start_seconds;
+                double loop_duration = project_.tempo().beats_to_time(pattern_result.loop_duration_beats);
+                double position_in_loop = project_.tempo().beats_to_time(pattern_result.position_in_loop_beats);
+                video_engine_.request_looped_frame(clip->id, clip->source_id,
+                                                   loop_start, loop_duration, position_in_loop);
+            } else {
+                double clip_local_seconds = project_.tempo().beats_to_time(clip_local_beats);
+                clip_local_seconds += clip->source_start_seconds;
 
-            double source_duration = video_engine_.get_source_duration(clip->source_id);
-            if (source_duration > 0.0 && clip_local_seconds >= source_duration) {
-                clip_local_seconds = source_duration - 0.001;
+                double source_duration = video_engine_.get_source_duration(clip->source_id);
+                if (source_duration > 0.0 && clip_local_seconds >= source_duration) {
+                    clip_local_seconds = source_duration - 0.001;
+                }
+
+                video_engine_.request_frame(clip->id, clip->source_id, clip_local_seconds);
             }
-
-            video_engine_.request_frame(clip->id, clip->source_id, clip_local_seconds);
         }
 
         const_clips.push_back(clip);
@@ -308,6 +304,67 @@ void MainWindow::sync_video_to_playhead() {
 
     viewport_.set_active_clips(const_clips);
     viewport_.set_selected_clip_id(timeline_.selected_clip_id());
+}
+
+void MainWindow::sync_audio_to_playhead() {
+    double current_beats = timeline_.playhead_position();
+    uint32_t sample_rate = audio_engine_.sample_rate();
+
+    auto active_clips = timeline_data_.clips_at_beat(current_beats);
+
+    std::vector<ClipAudioState> audio_clips;
+
+    for (TimelineClip* clip : active_clips) {
+        const MediaSource* source = source_library_.find_source(clip->source_id);
+        if (!source || !source->has_audio()) {
+            continue;
+        }
+
+        double clip_start_seconds = project_.tempo().beats_to_time(clip->start_beat);
+        double clip_duration_seconds = project_.tempo().beats_to_time(clip->duration_beats);
+        double clip_local_beats = current_beats - clip->start_beat;
+
+        ClipAudioState audio_state;
+        audio_state.buffer = source->audio_buffer;
+        audio_state.timeline_start_frame = static_cast<int64_t>(clip_start_seconds * sample_rate);
+        audio_state.duration_frames = static_cast<int64_t>(clip_duration_seconds * sample_rate);
+        audio_state.volume = 1.0f;
+
+        PatternEvaluationResult pattern_result = pattern_evaluator_.evaluate(*clip, clip_local_beats);
+
+        if (pattern_result.use_looped_playback) {
+            double loop_start_seconds = clip->source_start_seconds;
+            double loop_duration_seconds = project_.tempo().beats_to_time(pattern_result.loop_duration_beats);
+
+            audio_state.use_looped_audio = true;
+            audio_state.loop_start_frames = static_cast<int64_t>(loop_start_seconds * source->audio_buffer->sample_rate());
+            audio_state.loop_duration_frames = static_cast<int64_t>(loop_duration_seconds * source->audio_buffer->sample_rate());
+            audio_state.loop_phase_offset_frames = 0;
+            audio_state.source_offset_frames = 0;
+        } else {
+            audio_state.source_offset_frames = static_cast<int64_t>(clip->source_start_seconds * source->audio_buffer->sample_rate());
+        }
+
+        if (!clip->effects.empty()) {
+            EffectContext context;
+            context.clip = clip;
+            context.tempo = &project_.tempo();
+            context.current_beats = current_beats;
+            context.clip_local_beats = clip_local_beats;
+
+            EffectResult result = script_engine_.evaluate_effects(clip->effects, context);
+
+            if (result.use_looped_audio && result.audio_loop_duration_seconds > 0.0) {
+                audio_state.use_looped_audio = true;
+                audio_state.loop_start_frames = static_cast<int64_t>(result.audio_loop_start_seconds * source->audio_buffer->sample_rate());
+                audio_state.loop_duration_frames = static_cast<int64_t>(result.audio_loop_duration_seconds * source->audio_buffer->sample_rate());
+            }
+        }
+
+        audio_clips.push_back(std::move(audio_state));
+    }
+
+    audio_engine_.set_active_clips(std::move(audio_clips));
 }
 
 void MainWindow::setup_dockspace() {
