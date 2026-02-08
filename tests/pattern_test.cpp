@@ -22,7 +22,8 @@ TEST_F(PatternTest, DefaultState) {
     EXPECT_TRUE(p.name.empty());
     EXPECT_EQ(p.length_subdivisions, 16);
     EXPECT_TRUE(p.triggers.empty());
-    EXPECT_FALSE(p.restart_on_trigger);
+    EXPECT_FALSE(p.scale_x_settings.restart_on_trigger);
+    EXPECT_FALSE(p.position_x_settings.restart_on_trigger);
 }
 
 TEST_F(PatternTest, ValueAtReturnsNulloptWhenNoTriggers) {

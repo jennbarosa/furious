@@ -328,7 +328,7 @@ TEST_F(PatternEvaluatorTest, ShortPatternLength) {
 TEST_F(PatternEvaluatorTest, RestartOnTriggerSetsRestartClipAtTriggerSubdivision) {
     std::string id = library.create_pattern("Restart");
     Pattern* p = library.find_pattern(id);
-    p->restart_on_trigger = true;
+    p->scale_x_settings.restart_on_trigger = true;
     p->triggers.push_back({0, PatternTargetProperty::ScaleX, 1.0f});
     p->triggers.push_back({4, PatternTargetProperty::ScaleX, 2.0f});
     clip.patterns.push_back({id, true, 0});
@@ -346,12 +346,29 @@ TEST_F(PatternEvaluatorTest, RestartOnTriggerSetsRestartClipAtTriggerSubdivision
 TEST_F(PatternEvaluatorTest, RestartOnTriggerDisabledDoesNotSetRestartClip) {
     std::string id = library.create_pattern("NoRestart");
     Pattern* p = library.find_pattern(id);
-    p->restart_on_trigger = false;
+    p->scale_x_settings.restart_on_trigger = false;
     p->triggers.push_back({0, PatternTargetProperty::ScaleX, 1.0f});
     clip.patterns.push_back({id, true, 0});
 
     auto result = evaluator.evaluate(clip, 0.0);
     EXPECT_FALSE(result.restart_clip);
+}
+
+TEST_F(PatternEvaluatorTest, RestartOnTriggerIsPerProperty) {
+    std::string id = library.create_pattern("PerProp");
+    Pattern* p = library.find_pattern(id);
+    p->scale_x_settings.restart_on_trigger = true;
+    p->position_x_settings.restart_on_trigger = false;
+    p->triggers.push_back({0, PatternTargetProperty::ScaleX, 1.0f});
+    p->triggers.push_back({0, PatternTargetProperty::PositionX, 100.0f});
+    p->triggers.push_back({4, PatternTargetProperty::PositionX, 200.0f});
+    clip.patterns.push_back({id, true, 0});
+
+    auto result0 = evaluator.evaluate(clip, 0.0);
+    EXPECT_TRUE(result0.restart_clip);
+
+    auto result4 = evaluator.evaluate(clip, 1.0);
+    EXPECT_FALSE(result4.restart_clip);
 }
 
 } // namespace
