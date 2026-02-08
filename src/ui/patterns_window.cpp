@@ -197,6 +197,16 @@ void PatternsWindow::render_pattern_editor() {
     prop_button(PatternTargetProperty::FlipV);
     ImGui::NewLine();
 
+    auto& prop_settings = pattern->settings_for(current_property_);
+    bool restart_on_trigger = prop_settings.restart_on_trigger;
+    if (ImGui::Checkbox("Restart clip on trigger", &restart_on_trigger)) {
+        begin_edit(*pattern);
+        pattern->settings_for(current_property_).restart_on_trigger = restart_on_trigger;
+        end_edit(*pattern);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s)", prop_settings.restart_on_trigger ? "ON" : "OFF");
+
     ImGui::Separator();
 
     render_grid(*pattern);
