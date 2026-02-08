@@ -125,6 +125,7 @@ pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
 pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
 pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
 pkg_check_modules(SWSCALE REQUIRED IMPORTED_TARGET libswscale)
+pkg_check_modules(SWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
 
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -199,6 +200,8 @@ add_library(furious_lib STATIC
     src/core/pattern_evaluator.cpp
     src/audio/audio_clip.cpp
     src/audio/audio_engine.cpp
+    src/audio/audio_buffer.cpp
+    src/audio/audio_decoder.cpp
     src/video/source_library.cpp
     src/video/video_decoder.cpp
     src/video/video_engine.cpp
@@ -222,6 +225,7 @@ target_link_libraries(furious_lib PUBLIC
     PkgConfig::AVFORMAT
     PkgConfig::AVUTIL
     PkgConfig::SWSCALE
+    PkgConfig::SWRESAMPLE
 )
 
 add_executable(furious src/main.cpp)
@@ -245,11 +249,15 @@ if(BUILD_TESTS)
         tests/timeline_test.cpp
         tests/timeline_data_test.cpp
         tests/audio_test.cpp
+        tests/audio_buffer_test.cpp
+        tests/audio_decoder_test.cpp
         tests/source_library_test.cpp
         tests/video_test.cpp
         tests/effects_test.cpp
         tests/script_engine_test.cpp
         tests/command_test.cpp
+        tests/pattern_test.cpp
+        tests/pattern_evaluator_test.cpp
     )
 
     target_link_libraries(furious_tests PRIVATE
@@ -290,6 +298,8 @@ if(BUILD_INTEGRATION_TESTS)
         src/core/pattern_evaluator.cpp
         src/audio/audio_clip.cpp
         src/audio/audio_engine.cpp
+        src/audio/audio_buffer.cpp
+        src/audio/audio_decoder.cpp
         src/video/source_library.cpp
         src/video/video_decoder.cpp
         src/video/video_engine.cpp
@@ -313,6 +323,7 @@ if(BUILD_INTEGRATION_TESTS)
         PkgConfig::AVFORMAT
         PkgConfig::AVUTIL
         PkgConfig::SWSCALE
+        PkgConfig::SWRESAMPLE
     )
 
     add_executable(furious_integration_tests
@@ -325,6 +336,8 @@ if(BUILD_INTEGRATION_TESTS)
         tests/integration/sync_tests.cpp
         tests/integration/user_flow_tests.cpp
         tests/integration/undo_redo_tests.cpp
+        tests/integration/pattern_tests.cpp
+        tests/integration/audio_engine_tests.cpp
     )
 
     target_link_libraries(furious_integration_tests PRIVATE
