@@ -1,6 +1,8 @@
 #include "furious/core/pattern_evaluator.hpp"
 #include <cmath>
 #include <array>
+#include <vector>
+#include <algorithm>
 
 namespace furious {
 
@@ -33,6 +35,60 @@ const PatternTrigger* find_active_trigger(
     return best;
 }
 
+void calculate_loop_info(
+    const Pattern& pattern,
+    double total_subdivisions,
+    int subdivision_index,
+    double subdivisions_per_beat,
+    PatternEvaluationResult& result
+) {
+    std::vector<int> restart_subdivs;
+    for (const auto& trigger : pattern.triggers) {
+        const auto& settings = pattern.settings_for(trigger.target);
+        if (!settings.restart_on_trigger) continue;
+
+        bool found = false;
+        for (int s : restart_subdivs) {
+            if (s == trigger.subdivision_index) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            restart_subdivs.push_back(trigger.subdivision_index);
+        }
+    }
+
+    if (restart_subdivs.empty()) return;
+
+    std::sort(restart_subdivs.begin(), restart_subdivs.end());
+
+    int most_recent_trigger_subdiv = restart_subdivs.back();
+    int next_trigger_subdiv = restart_subdivs[0];
+
+    for (size_t i = 0; i < restart_subdivs.size(); ++i) {
+        if (restart_subdivs[i] <= subdivision_index) {
+            most_recent_trigger_subdiv = restart_subdivs[i];
+            next_trigger_subdiv = restart_subdivs[(i + 1) % restart_subdivs.size()];
+        }
+    }
+
+    int interval;
+    if (next_trigger_subdiv > most_recent_trigger_subdiv) {
+        interval = next_trigger_subdiv - most_recent_trigger_subdiv;
+    } else {
+        interval = pattern.length_subdivisions - most_recent_trigger_subdiv + next_trigger_subdiv;
+    }
+
+    double position_in_loop = total_subdivisions - most_recent_trigger_subdiv;
+    while (position_in_loop < 0) position_in_loop += pattern.length_subdivisions;
+    position_in_loop = std::fmod(position_in_loop, static_cast<double>(interval));
+
+    result.use_looped_playback = true;
+    result.loop_duration_beats = interval / subdivisions_per_beat;
+    result.position_in_loop_beats = position_in_loop / subdivisions_per_beat;
+}
+
 }
 
 PatternEvaluationResult PatternEvaluator::evaluate(
@@ -60,7 +116,7 @@ PatternEvaluationResult PatternEvaluator::evaluate(
             subdivision_index += pattern->length_subdivisions;
         }
 
-        constexpr std::array<PatternTargetProperty, 7> all_properties = {
+        constexpr std::array<PatternTargetProperty, 7> held_properties = {
             PatternTargetProperty::PositionX,
             PatternTargetProperty::PositionY,
             PatternTargetProperty::ScaleX,
@@ -70,7 +126,7 @@ PatternEvaluationResult PatternEvaluator::evaluate(
             PatternTargetProperty::FlipV
         };
 
-        for (auto prop : all_properties) {
+        for (auto prop : held_properties) {
             const PatternTrigger* active = find_active_trigger(*pattern, subdivision_index, prop);
             if (!active) continue;
 
@@ -97,6 +153,20 @@ PatternEvaluationResult PatternEvaluator::evaluate(
                     result.flip_v = active->value != 0.0f;
                     break;
             }
+        }
+
+        for (const auto& trigger : pattern->triggers) {
+            if (trigger.subdivision_index == subdivision_index) {
+                const auto& settings = pattern->settings_for(trigger.target);
+                if (settings.restart_on_trigger) {
+                    result.restart_clip = true;
+                    break;
+                }
+            }
+        }
+
+        if (!result.use_looped_playback) {
+            calculate_loop_info(*pattern, total_subdivisions, subdivision_index, subdivisions_per_beat, result);
         }
     }
 
