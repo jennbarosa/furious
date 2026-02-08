@@ -108,6 +108,18 @@ PatternTrigger json_to_trigger(const nlohmann::json& j) {
     return trigger;
 }
 
+nlohmann::json settings_to_json(const PatternPropertySettings& settings) {
+    nlohmann::json j;
+    j["restart_on_trigger"] = settings.restart_on_trigger;
+    return j;
+}
+
+PatternPropertySettings json_to_settings(const nlohmann::json& j) {
+    PatternPropertySettings settings;
+    settings.restart_on_trigger = j.value("restart_on_trigger", false);
+    return settings;
+}
+
 nlohmann::json pattern_to_json(const Pattern& pattern) {
     nlohmann::json j;
     j["id"] = pattern.id;
@@ -117,6 +129,13 @@ nlohmann::json pattern_to_json(const Pattern& pattern) {
     for (const auto& trigger : pattern.triggers) {
         j["triggers"].push_back(trigger_to_json(trigger));
     }
+    j["position_x_settings"] = settings_to_json(pattern.position_x_settings);
+    j["position_y_settings"] = settings_to_json(pattern.position_y_settings);
+    j["scale_x_settings"] = settings_to_json(pattern.scale_x_settings);
+    j["scale_y_settings"] = settings_to_json(pattern.scale_y_settings);
+    j["rotation_settings"] = settings_to_json(pattern.rotation_settings);
+    j["flip_h_settings"] = settings_to_json(pattern.flip_h_settings);
+    j["flip_v_settings"] = settings_to_json(pattern.flip_v_settings);
     return j;
 }
 
@@ -129,6 +148,27 @@ Pattern json_to_pattern(const nlohmann::json& j) {
         for (const auto& t : j["triggers"]) {
             pattern.triggers.push_back(json_to_trigger(t));
         }
+    }
+    if (j.contains("position_x_settings")) {
+        pattern.position_x_settings = json_to_settings(j["position_x_settings"]);
+    }
+    if (j.contains("position_y_settings")) {
+        pattern.position_y_settings = json_to_settings(j["position_y_settings"]);
+    }
+    if (j.contains("scale_x_settings")) {
+        pattern.scale_x_settings = json_to_settings(j["scale_x_settings"]);
+    }
+    if (j.contains("scale_y_settings")) {
+        pattern.scale_y_settings = json_to_settings(j["scale_y_settings"]);
+    }
+    if (j.contains("rotation_settings")) {
+        pattern.rotation_settings = json_to_settings(j["rotation_settings"]);
+    }
+    if (j.contains("flip_h_settings")) {
+        pattern.flip_h_settings = json_to_settings(j["flip_h_settings"]);
+    }
+    if (j.contains("flip_v_settings")) {
+        pattern.flip_v_settings = json_to_settings(j["flip_v_settings"]);
     }
     return pattern;
 }
@@ -236,7 +276,6 @@ bool ProjectData::save_to_file(const std::string& filepath) const {
     j["audio"]["clip_start_seconds"] = clip_start_seconds;
     j["audio"]["clip_end_seconds"] = clip_end_seconds;
 
-    // Timeline data
     j["sources"] = nlohmann::json::array();
     for (const auto& source : sources) {
         j["sources"].push_back(source_to_json(source));
