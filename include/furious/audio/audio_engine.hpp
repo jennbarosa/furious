@@ -1,11 +1,26 @@
 #pragma once
 
 #include "furious/audio/audio_clip.hpp"
+#include "furious/audio/audio_buffer.hpp"
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include <vector>
 
 namespace furious {
+
+struct ClipAudioState {
+    std::shared_ptr<const AudioBuffer> buffer;
+    int64_t timeline_start_frame = 0;
+    int64_t source_offset_frames = 0;
+    int64_t duration_frames = 0;
+    float volume = 1.0f;
+
+    bool use_looped_audio = false;
+    int64_t loop_start_frames = 0;
+    int64_t loop_duration_frames = 0;
+    int64_t loop_phase_offset_frames = 0;
+};
 
 class AudioEngine {
 public:
@@ -55,6 +70,10 @@ public:
     [[nodiscard]] const std::vector<float>& click_sound_low() const { return click_sound_low_; }
     [[nodiscard]] uint32_t sample_rate() const { return sample_rate_; }
 
+    void set_active_clips(std::vector<ClipAudioState> clips);
+    void swap_active_clips_if_pending();
+    [[nodiscard]] const std::vector<ClipAudioState>& active_clips() const { return active_clips_front_; }
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
@@ -70,6 +89,11 @@ private:
     uint32_t sample_rate_ = 44100;
     std::atomic<double> clip_start_seconds_{0.0};
     std::atomic<double> clip_end_seconds_{0.0};
+
+    std::vector<ClipAudioState> active_clips_front_;
+    std::vector<ClipAudioState> active_clips_back_;
+    std::atomic<bool> clips_swap_pending_{false};
+    mutable std::mutex clips_mutex_;
 
     void generate_click_sounds();
 };

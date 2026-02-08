@@ -17,7 +17,7 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
     bool has_clip = engine->has_clip();
     bool is_playing = engine->is_playing();
 
-    std::fill(out, out + frame_count * 2, 0.0f); // silence
+    std::fill(out, out + frame_count * 2, 0.0f);
 
     if (!is_playing) {
         return;
@@ -25,6 +25,46 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
 
     uint64_t current_frame = engine->playhead_frame();
     uint32_t sample_rate = engine->sample_rate();
+
+    engine->swap_active_clips_if_pending();
+
+    const auto& active_clips = engine->active_clips();
+    for (const auto& clip_state : active_clips) {
+        if (!clip_state.buffer || clip_state.buffer->empty()) continue;
+
+        uint32_t channels = clip_state.buffer->channels();
+
+        for (ma_uint32 i = 0; i < frame_count; ++i) {
+            int64_t global_frame = static_cast<int64_t>(current_frame + i);
+            int64_t frame_in_clip = global_frame - clip_state.timeline_start_frame;
+
+            if (frame_in_clip < 0 || frame_in_clip >= clip_state.duration_frames) {
+                continue;
+            }
+
+            int64_t source_frame;
+            if (clip_state.use_looped_audio && clip_state.loop_duration_frames > 0) {
+                int64_t adjusted_frame = frame_in_clip + clip_state.loop_phase_offset_frames;
+                int64_t position_in_loop = adjusted_frame % clip_state.loop_duration_frames;
+                if (position_in_loop < 0) position_in_loop += clip_state.loop_duration_frames;
+                source_frame = clip_state.loop_start_frames + position_in_loop;
+            } else {
+                source_frame = clip_state.source_offset_frames + frame_in_clip;
+            }
+
+            if (source_frame < 0 || source_frame >= static_cast<int64_t>(clip_state.buffer->frame_count())) {
+                continue;
+            }
+
+            float left = clip_state.buffer->sample_at(static_cast<uint64_t>(source_frame), 0);
+            float right = channels >= 2
+                ? clip_state.buffer->sample_at(static_cast<uint64_t>(source_frame), 1)
+                : left;
+
+            out[i * 2] += left * clip_state.volume;
+            out[i * 2 + 1] += right * clip_state.volume;
+        }
+    }
 
     if (has_clip) {
         const AudioClip* clip = engine->clip();
@@ -255,6 +295,20 @@ uint64_t AudioEngine::clip_end_frame() const {
         return clip_->total_frames();
     }
     return static_cast<uint64_t>(end_seconds * sample_rate_);
+}
+
+void AudioEngine::set_active_clips(std::vector<ClipAudioState> clips) {
+    std::lock_guard<std::mutex> lock(clips_mutex_);
+    active_clips_back_ = std::move(clips);
+    clips_swap_pending_ = true;
+}
+
+void AudioEngine::swap_active_clips_if_pending() {
+    if (clips_swap_pending_.load()) {
+        std::lock_guard<std::mutex> lock(clips_mutex_);
+        std::swap(active_clips_front_, active_clips_back_);
+        clips_swap_pending_ = false;
+    }
 }
 
 } // namespace furious
