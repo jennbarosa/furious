@@ -6,6 +6,7 @@
 #include <atomic>
 #include <mutex>
 #include <vector>
+#include <string>
 
 namespace furious {
 
@@ -20,6 +21,13 @@ struct ClipAudioState {
     int64_t loop_start_frames = 0;
     int64_t loop_duration_frames = 0;
     int64_t loop_phase_offset_frames = 0;
+
+    float pitch_shift_cents = 0.0f;
+
+    std::string clip_id;               
+    bool autotune_enabled = false;     
+    int autotune_target_midi = 60;     
+    float autotune_amount = 1.0f;     
 };
 
 class AudioEngine {
@@ -49,6 +57,11 @@ public:
 
     void set_metronome_enabled(bool enabled) { metronome_enabled_ = enabled; }
     [[nodiscard]] bool metronome_enabled() const { return metronome_enabled_; }
+
+    void set_bgm_volume(float vol) { bgm_volume_ = vol; }
+    [[nodiscard]] float bgm_volume() const { return bgm_volume_; }
+    void set_clip_volume(float vol) { clip_volume_ = vol; }
+    [[nodiscard]] float clip_volume() const { return clip_volume_; }
     void set_bpm(double bpm);
     [[nodiscard]] double bpm() const { return bpm_; }
 
@@ -74,6 +87,10 @@ public:
     void swap_active_clips_if_pending();
     [[nodiscard]] const std::vector<ClipAudioState>& active_clips() const { return active_clips_front_; }
 
+    void* get_pitch_shifter_for_clip(const std::string& clip_id);
+    void reset_pitch_shifter(const std::string& clip_id);
+    void clear_pitch_shifters();
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
@@ -89,6 +106,8 @@ private:
     uint32_t sample_rate_ = 44100;
     std::atomic<double> clip_start_seconds_{0.0};
     std::atomic<double> clip_end_seconds_{0.0};
+    std::atomic<float> bgm_volume_{1.0f};
+    std::atomic<float> clip_volume_{1.0f};
 
     std::vector<ClipAudioState> active_clips_front_;
     std::vector<ClipAudioState> active_clips_back_;

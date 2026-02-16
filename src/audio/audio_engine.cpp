@@ -1,13 +1,29 @@
 #include "furious/audio/audio_engine.hpp"
+#include "furious/audio/pitch_shifter.hpp"
 #include "miniaudio.h"
 #include <cmath>
+#include <unordered_map>
 
 namespace furious {
 
 struct AudioEngine::Impl {
     ma_device device;
     bool device_initialized = false;
-    uint64_t metronome_click_position = 0;  // (0 = not playing)
+    uint64_t metronome_click_position = 0;
+
+    std::unordered_map<std::string, std::unique_ptr<PitchShifter>> pitch_shifter_instances;
+    uint32_t sample_rate = 44100;
+
+    PitchShifter* get_or_create_pitch_shifter(const std::string& clip_id) {
+        auto it = pitch_shifter_instances.find(clip_id);
+        if (it != pitch_shifter_instances.end()) {
+            return it->second.get();
+        }
+        auto instance = std::make_unique<PitchShifter>(sample_rate, 1);
+        PitchShifter* ptr = instance.get();
+        pitch_shifter_instances[clip_id] = std::move(instance);
+        return ptr;
+    }
 };
 
 static void audio_callback(ma_device* device, void* output, const void* /*input*/, ma_uint32 frame_count) {
@@ -29,10 +45,33 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
     engine->swap_active_clips_if_pending();
 
     const auto& active_clips = engine->active_clips();
+
     for (const auto& clip_state : active_clips) {
         if (!clip_state.buffer || clip_state.buffer->empty()) continue;
 
         uint32_t channels = clip_state.buffer->channels();
+
+        bool use_rubberband = clip_state.autotune_enabled && !clip_state.clip_id.empty();
+        PitchShifter* pitch_shifter = nullptr;
+        if (use_rubberband) {
+            pitch_shifter = static_cast<PitchShifter*>(engine->get_pitch_shifter_for_clip(clip_state.clip_id));
+            if (pitch_shifter) {
+                pitch_shifter->set_pitch_shift_cents(clip_state.pitch_shift_cents);
+            }
+        }
+
+        double pitch_ratio = 1.0;
+        if (!use_rubberband && std::abs(clip_state.pitch_shift_cents) > 0.01f) {
+            pitch_ratio = std::pow(2.0, static_cast<double>(clip_state.pitch_shift_cents) / 1200.0);
+        }
+
+        std::vector<float> mono_buffer;
+        std::vector<ma_uint32> valid_indices;
+
+        if (use_rubberband && pitch_shifter) {
+            mono_buffer.reserve(frame_count);
+            valid_indices.reserve(frame_count);
+        }
 
         for (ma_uint32 i = 0; i < frame_count; ++i) {
             int64_t global_frame = static_cast<int64_t>(current_frame + i);
@@ -42,27 +81,60 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
                 continue;
             }
 
-            int64_t source_frame;
+            double source_frame_d;
             if (clip_state.use_looped_audio && clip_state.loop_duration_frames > 0) {
                 int64_t adjusted_frame = frame_in_clip + clip_state.loop_phase_offset_frames;
-                int64_t position_in_loop = adjusted_frame % clip_state.loop_duration_frames;
-                if (position_in_loop < 0) position_in_loop += clip_state.loop_duration_frames;
-                source_frame = clip_state.loop_start_frames + position_in_loop;
+                double position_in_loop_d = std::fmod(static_cast<double>(adjusted_frame) * pitch_ratio,
+                                                      static_cast<double>(clip_state.loop_duration_frames));
+                if (position_in_loop_d < 0) position_in_loop_d += clip_state.loop_duration_frames;
+                source_frame_d = static_cast<double>(clip_state.loop_start_frames) + position_in_loop_d;
             } else {
-                source_frame = clip_state.source_offset_frames + frame_in_clip;
+                source_frame_d = static_cast<double>(clip_state.source_offset_frames) +
+                                 static_cast<double>(frame_in_clip) * pitch_ratio;
             }
 
-            if (source_frame < 0 || source_frame >= static_cast<int64_t>(clip_state.buffer->frame_count())) {
+            int64_t source_frame = static_cast<int64_t>(source_frame_d);
+            double frac = source_frame_d - static_cast<double>(source_frame);
+
+            if (source_frame < 0 || source_frame >= static_cast<int64_t>(clip_state.buffer->frame_count()) - 1) {
                 continue;
             }
 
-            float left = clip_state.buffer->sample_at(static_cast<uint64_t>(source_frame), 0);
-            float right = channels >= 2
-                ? clip_state.buffer->sample_at(static_cast<uint64_t>(source_frame), 1)
-                : left;
+            float left0 = clip_state.buffer->sample_at(static_cast<uint64_t>(source_frame), 0);
+            float left1 = clip_state.buffer->sample_at(static_cast<uint64_t>(source_frame + 1), 0);
+            float left = left0 + static_cast<float>(frac) * (left1 - left0);
 
-            out[i * 2] += left * clip_state.volume;
-            out[i * 2 + 1] += right * clip_state.volume;
+            float right;
+            if (channels >= 2) {
+                float right0 = clip_state.buffer->sample_at(static_cast<uint64_t>(source_frame), 1);
+                float right1 = clip_state.buffer->sample_at(static_cast<uint64_t>(source_frame + 1), 1);
+                right = right0 + static_cast<float>(frac) * (right1 - right0);
+            } else {
+                right = left;
+            }
+
+            if (use_rubberband && pitch_shifter) {
+                float mono = (left + right) * 0.5f;
+                mono_buffer.push_back(mono);
+                valid_indices.push_back(i);
+            } else {
+                float final_vol = clip_state.volume * engine->clip_volume();
+                out[i * 2] += left * final_vol;
+                out[i * 2 + 1] += right * final_vol;
+            }
+        }
+
+        if (use_rubberband && pitch_shifter && !mono_buffer.empty()) {
+            std::vector<float> processed(mono_buffer.size());
+            pitch_shifter->process(mono_buffer.data(), processed.data(), mono_buffer.size());
+
+            float final_vol = clip_state.volume * engine->clip_volume();
+            for (size_t j = 0; j < valid_indices.size(); ++j) {
+                ma_uint32 i = valid_indices[j];
+                float sample = processed[j];
+                out[i * 2] += sample * final_vol;
+                out[i * 2 + 1] += sample * final_vol;
+            }
         }
     }
 
@@ -72,6 +144,7 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
         uint64_t start_frame = engine->clip_start_frame();
         uint64_t end_frame = engine->clip_end_frame();
         uint64_t trimmed_duration = end_frame - start_frame;
+        float bgm_vol = engine->bgm_volume();
 
         for (ma_uint32 i = 0; i < frame_count; ++i) {
             uint64_t playhead_pos = current_frame + i;
@@ -80,11 +153,11 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
                 if (clip_frame < clip->total_frames()) {
                     size_t sample_index = clip_frame * channels;
                     if (channels >= 2) {
-                        out[i * 2] += clip->data()[sample_index];
-                        out[i * 2 + 1] += clip->data()[sample_index + 1];
+                        out[i * 2] += clip->data()[sample_index] * bgm_vol;
+                        out[i * 2 + 1] += clip->data()[sample_index + 1] * bgm_vol;
                     } else {
-                        out[i * 2] += clip->data()[sample_index];
-                        out[i * 2 + 1] += clip->data()[sample_index];
+                        out[i * 2] += clip->data()[sample_index] * bgm_vol;
+                        out[i * 2 + 1] += clip->data()[sample_index] * bgm_vol;
                     }
                 }
             }
@@ -130,6 +203,8 @@ AudioEngine::~AudioEngine() {
 }
 
 bool AudioEngine::initialize() {
+    impl_->sample_rate = sample_rate_;
+
     ma_device_config config = ma_device_config_init(ma_device_type_playback);
     config.playback.format = ma_format_f32;
     config.playback.channels = 2;
@@ -309,6 +384,21 @@ void AudioEngine::swap_active_clips_if_pending() {
         std::swap(active_clips_front_, active_clips_back_);
         clips_swap_pending_ = false;
     }
+}
+
+void* AudioEngine::get_pitch_shifter_for_clip(const std::string& clip_id) {
+    return impl_->get_or_create_pitch_shifter(clip_id);
+}
+
+void AudioEngine::reset_pitch_shifter(const std::string& clip_id) {
+    auto it = impl_->pitch_shifter_instances.find(clip_id);
+    if (it != impl_->pitch_shifter_instances.end()) {
+        it->second->reset();
+    }
+}
+
+void AudioEngine::clear_pitch_shifters() {
+    impl_->pitch_shifter_instances.clear();
 }
 
 } // namespace furious
