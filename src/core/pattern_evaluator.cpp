@@ -35,6 +35,11 @@ const PatternTrigger* find_active_trigger(
     return best;
 }
 
+struct TriggerInfo {
+    int subdivision_index;
+    int duration_subdivisions;
+};
+
 void calculate_loop_info(
     const Pattern& pattern,
     double total_subdivisions,
@@ -42,51 +47,80 @@ void calculate_loop_info(
     double subdivisions_per_beat,
     PatternEvaluationResult& result
 ) {
-    std::vector<int> restart_subdivs;
+    std::vector<TriggerInfo> restart_triggers;
     for (const auto& trigger : pattern.triggers) {
         const auto& settings = pattern.settings_for(trigger.target);
         if (!settings.restart_on_trigger) continue;
 
         bool found = false;
-        for (int s : restart_subdivs) {
-            if (s == trigger.subdivision_index) {
+        for (auto& t : restart_triggers) {
+            if (t.subdivision_index == trigger.subdivision_index) {
                 found = true;
+                if (trigger.duration_subdivisions > 0 &&
+                    (t.duration_subdivisions < 0 || trigger.duration_subdivisions < t.duration_subdivisions)) {
+                    t.duration_subdivisions = trigger.duration_subdivisions;
+                }
                 break;
             }
         }
         if (!found) {
-            restart_subdivs.push_back(trigger.subdivision_index);
+            restart_triggers.push_back({trigger.subdivision_index, trigger.duration_subdivisions});
         }
     }
 
-    if (restart_subdivs.empty()) return;
+    if (restart_triggers.empty()) return;
 
-    std::sort(restart_subdivs.begin(), restart_subdivs.end());
+    std::sort(restart_triggers.begin(), restart_triggers.end(),
+              [](const TriggerInfo& a, const TriggerInfo& b) {
+                  return a.subdivision_index < b.subdivision_index;
+              });
 
-    int most_recent_trigger_subdiv = restart_subdivs.back();
-    int next_trigger_subdiv = restart_subdivs[0];
+    size_t active_idx = restart_triggers.size() - 1;
+    size_t next_idx = 0;
 
-    for (size_t i = 0; i < restart_subdivs.size(); ++i) {
-        if (restart_subdivs[i] <= subdivision_index) {
-            most_recent_trigger_subdiv = restart_subdivs[i];
-            next_trigger_subdiv = restart_subdivs[(i + 1) % restart_subdivs.size()];
+    for (size_t i = 0; i < restart_triggers.size(); ++i) {
+        if (restart_triggers[i].subdivision_index <= subdivision_index) {
+            active_idx = i;
+            next_idx = (i + 1) % restart_triggers.size();
         }
     }
 
-    int interval;
+    int most_recent_trigger_subdiv = restart_triggers[active_idx].subdivision_index;
+    int next_trigger_subdiv = restart_triggers[next_idx].subdivision_index;
+    int trigger_duration = restart_triggers[active_idx].duration_subdivisions;
+
+    int max_interval;
     if (next_trigger_subdiv > most_recent_trigger_subdiv) {
-        interval = next_trigger_subdiv - most_recent_trigger_subdiv;
+        max_interval = next_trigger_subdiv - most_recent_trigger_subdiv;
     } else {
-        interval = pattern.length_subdivisions - most_recent_trigger_subdiv + next_trigger_subdiv;
+        max_interval = pattern.length_subdivisions - most_recent_trigger_subdiv + next_trigger_subdiv;
     }
 
     double position_in_loop = total_subdivisions - most_recent_trigger_subdiv;
     while (position_in_loop < 0) position_in_loop += pattern.length_subdivisions;
-    position_in_loop = std::fmod(position_in_loop, static_cast<double>(interval));
 
-    result.use_looped_playback = true;
-    result.loop_duration_beats = interval / subdivisions_per_beat;
-    result.position_in_loop_beats = position_in_loop / subdivisions_per_beat;
+    bool has_custom_duration = trigger_duration > 0 && trigger_duration < max_interval;
+
+    if (has_custom_duration) {
+        if (position_in_loop >= trigger_duration) {
+            result.use_looped_playback = true;
+            result.loop_duration_beats = trigger_duration / subdivisions_per_beat;
+            result.position_in_loop_beats = (trigger_duration - 0.001) / subdivisions_per_beat;
+            result.restart_offset_beats = pattern.restart_offset_beats;
+            result.freeze_at_end = true;
+        } else {
+            result.use_looped_playback = true;
+            result.loop_duration_beats = trigger_duration / subdivisions_per_beat;
+            result.position_in_loop_beats = position_in_loop / subdivisions_per_beat;
+            result.restart_offset_beats = pattern.restart_offset_beats;
+        }
+    } else {
+        position_in_loop = std::fmod(position_in_loop, static_cast<double>(max_interval));
+        result.use_looped_playback = true;
+        result.loop_duration_beats = max_interval / subdivisions_per_beat;
+        result.position_in_loop_beats = position_in_loop / subdivisions_per_beat;
+        result.restart_offset_beats = pattern.restart_offset_beats;
+    }
 }
 
 }
