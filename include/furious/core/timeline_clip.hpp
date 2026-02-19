@@ -31,6 +31,9 @@ struct TimelineClip {
     std::vector<ClipEffect> effects;
     std::vector<ClipPatternReference> patterns;
 
+    std::string pitch_track_id;
+    float volume = 1.0f;
+
     [[nodiscard]] double end_beat() const { return start_beat + duration_beats; }
 
     [[nodiscard]] bool contains_beat(double beat) const {
