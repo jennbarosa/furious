@@ -1,5 +1,6 @@
 #include "furious/core/project_data.hpp"
 #include "furious/core/enum_utils.hpp"
+#include "furious/core/pitch_track.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -36,12 +37,16 @@ MediaSource json_to_source(const nlohmann::json& j) {
 nlohmann::json track_to_json(const Track& track) {
     nlohmann::json j;
     j["name"] = track.name;
+    j["muted"] = track.muted;
+    j["soloed"] = track.soloed;
     return j;
 }
 
 Track json_to_track(const nlohmann::json& j) {
     Track track;
     track.name = j.value("name", "");
+    track.muted = j.value("muted", false);
+    track.soloed = j.value("soloed", false);
     return track;
 }
 
@@ -97,6 +102,7 @@ nlohmann::json trigger_to_json(const PatternTrigger& trigger) {
     j["subdivision_index"] = trigger.subdivision_index;
     j["target_property"] = property_to_string(trigger.target);
     j["value"] = trigger.value;
+    j["duration_subdivisions"] = trigger.duration_subdivisions;
     return j;
 }
 
@@ -105,6 +111,7 @@ PatternTrigger json_to_trigger(const nlohmann::json& j) {
     trigger.subdivision_index = j.value("subdivision_index", 0);
     trigger.target = string_to_property(j.value("target_property", "scale_x"));
     trigger.value = j.value("value", 1.0f);
+    trigger.duration_subdivisions = j.value("duration_subdivisions", -1);
     return trigger;
 }
 
@@ -136,6 +143,7 @@ nlohmann::json pattern_to_json(const Pattern& pattern) {
     j["rotation_settings"] = settings_to_json(pattern.rotation_settings);
     j["flip_h_settings"] = settings_to_json(pattern.flip_h_settings);
     j["flip_v_settings"] = settings_to_json(pattern.flip_v_settings);
+    j["restart_offset_beats"] = pattern.restart_offset_beats;
     return j;
 }
 
@@ -170,6 +178,7 @@ Pattern json_to_pattern(const nlohmann::json& j) {
     if (j.contains("flip_v_settings")) {
         pattern.flip_v_settings = json_to_settings(j["flip_v_settings"]);
     }
+    pattern.restart_offset_beats = j.value("restart_offset_beats", 0.0);
     return pattern;
 }
 
@@ -187,6 +196,51 @@ ClipPatternReference json_to_pattern_ref(const nlohmann::json& j) {
     ref.enabled = j.value("enabled", true);
     ref.offset_subdivisions = j.value("offset_subdivisions", 0);
     return ref;
+}
+
+nlohmann::json pitch_note_to_json(const PitchNote& note) {
+    nlohmann::json j;
+    j["subdivision_index"] = note.subdivision_index;
+    j["midi_note"] = note.midi_note;
+    j["fine_tune_cents"] = note.fine_tune_cents;
+    return j;
+}
+
+PitchNote json_to_pitch_note(const nlohmann::json& j) {
+    PitchNote note;
+    note.subdivision_index = j.value("subdivision_index", 0);
+    note.midi_note = j.value("midi_note", 60);
+    note.fine_tune_cents = j.value("fine_tune_cents", 0.0f);
+    return note;
+}
+
+nlohmann::json pitch_track_to_json(const PitchTrack& track) {
+    nlohmann::json j;
+    j["id"] = track.id;
+    j["name"] = track.name;
+    j["length_subdivisions"] = track.length_subdivisions;
+    j["smoothing"] = track.smoothing;
+    j["autotune_enabled"] = track.autotune_enabled;
+    j["notes"] = nlohmann::json::array();
+    for (const auto& note : track.notes) {
+        j["notes"].push_back(pitch_note_to_json(note));
+    }
+    return j;
+}
+
+PitchTrack json_to_pitch_track(const nlohmann::json& j) {
+    PitchTrack track;
+    track.id = j.value("id", "");
+    track.name = j.value("name", "Pitch Track");
+    track.length_subdivisions = j.value("length_subdivisions", 16);
+    track.smoothing = j.value("smoothing", 0.15f);
+    track.autotune_enabled = j.value("autotune_enabled", true);
+    if (j.contains("notes") && j["notes"].is_array()) {
+        for (const auto& note_json : j["notes"]) {
+            track.notes.push_back(json_to_pitch_note(note_json));
+        }
+    }
+    return track;
 }
 
 nlohmann::json clip_to_json(const TimelineClip& clip) {
@@ -217,6 +271,12 @@ nlohmann::json clip_to_json(const TimelineClip& clip) {
         }
     }
 
+    if (!clip.pitch_track_id.empty()) {
+        j["pitch_track_id"] = clip.pitch_track_id;
+    }
+
+    j["volume"] = clip.volume;
+
     return j;
 }
 
@@ -245,6 +305,9 @@ TimelineClip json_to_clip(const nlohmann::json& j) {
             clip.patterns.push_back(json_to_pattern_ref(ref_json));
         }
     }
+
+    clip.pitch_track_id = j.value("pitch_track_id", "");
+    clip.volume = j.value("volume", 1.0f);
 
     return clip;
 }
@@ -295,6 +358,18 @@ bool ProjectData::save_to_file(const std::string& filepath) const {
     for (const auto& pattern : patterns) {
         j["patterns"].push_back(pattern_to_json(pattern));
     }
+
+    j["pitch_tracks"] = nlohmann::json::array();
+    for (const auto& track : pitch_tracks) {
+        j["pitch_tracks"].push_back(pitch_track_to_json(track));
+    }
+
+    j["pitch_editor"]["preview_enabled"] = pitch_preview_enabled;
+    j["pitch_editor"]["preview_duration"] = pitch_preview_duration;
+    j["pitch_editor"]["open"] = pitch_editor_open;
+    j["pitch_editor"]["bgm_volume"] = pitch_bgm_volume;
+    j["pitch_editor"]["clip_volume"] = pitch_clip_volume;
+    j["pitch_editor"]["overlay_pattern_id"] = pitch_overlay_pattern_id;
 
     std::ofstream file(filepath);
     if (!file.is_open()) {
@@ -366,6 +441,7 @@ bool ProjectData::load_from_file(const std::string& filepath, ProjectData& out_d
     out_data.tracks.clear();
     out_data.clips.clear();
     out_data.patterns.clear();
+    out_data.pitch_tracks.clear();
 
     if (j.contains("sources") && j["sources"].is_array()) {
         for (const auto& src_json : j["sources"]) {
@@ -389,6 +465,22 @@ bool ProjectData::load_from_file(const std::string& filepath, ProjectData& out_d
         for (const auto& pattern_json : j["patterns"]) {
             out_data.patterns.push_back(json_to_pattern(pattern_json));
         }
+    }
+
+    if (j.contains("pitch_tracks") && j["pitch_tracks"].is_array()) {
+        for (const auto& track_json : j["pitch_tracks"]) {
+            out_data.pitch_tracks.push_back(json_to_pitch_track(track_json));
+        }
+    }
+
+    if (j.contains("pitch_editor")) {
+        auto& pe = j["pitch_editor"];
+        out_data.pitch_preview_enabled = pe.value("preview_enabled", false);
+        out_data.pitch_preview_duration = pe.value("preview_duration", 0.5f);
+        out_data.pitch_editor_open = pe.value("open", false);
+        out_data.pitch_bgm_volume = pe.value("bgm_volume", 1.0f);
+        out_data.pitch_clip_volume = pe.value("clip_volume", 1.0f);
+        out_data.pitch_overlay_pattern_id = pe.value("overlay_pattern_id", std::string{});
     }
 
     return true;
