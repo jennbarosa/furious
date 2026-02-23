@@ -272,7 +272,167 @@ void PitchEditorWindow::render_track_editor() {
     render_note_properties(*track);
 }
 
-void PitchEditorWindow::render_grid(PitchTrack& /*track*/) {}
+void PitchEditorWindow::render_grid(PitchTrack& track) {
+    ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
+    ImVec2 canvas_size = ImGui::GetContentRegionAvail();
+    last_canvas_width_ = canvas_size.x;
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    draw_list->AddRectFilled(
+        canvas_pos,
+        ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y),
+        IM_COL32(30, 30, 35, 255)
+    );
+
+    draw_list->PushClipRect(canvas_pos, ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y), true);
+
+    float pixels_per_subdiv = BASE_PIXELS_PER_SUBDIVISION * zoom_;
+
+    clamp_scroll(track);
+
+    float note_height = (canvas_size.y * vertical_zoom_) / static_cast<float>(NOTE_RANGE);
+    for (int midi = MIN_MIDI_NOTE; midi <= MAX_MIDI_NOTE; ++midi) {
+        float y = midi_to_y(midi, canvas_pos.y, canvas_size.y);
+
+        if (y < canvas_pos.y - 1.0f || y > canvas_pos.y + canvas_size.y + 1.0f) continue;
+
+        bool is_c = (midi % 12 == 0);
+        ImU32 color = is_c ? IM_COL32(80, 80, 90, 255) : IM_COL32(45, 45, 50, 255);
+
+        draw_list->AddRectFilled(
+            ImVec2(canvas_pos.x, y),
+            ImVec2(canvas_pos.x + canvas_size.x, y + 1.0f),
+            color
+        );
+
+        if (is_c) {
+            draw_list->AddText(ImVec2(canvas_pos.x + 2, y - 8), IM_COL32(150, 150, 150, 255), midi_to_note_name(midi).c_str());
+        }
+    }
+
+    int start_subdiv = static_cast<int>(scroll_offset_ / pixels_per_subdiv);
+    int end_subdiv = static_cast<int>((scroll_offset_ + canvas_size.x) / pixels_per_subdiv) + 1;
+    start_subdiv = std::max(0, start_subdiv);
+    end_subdiv = std::min(end_subdiv, track.length_subdivisions);
+
+    bool draw_subdivisions = pixels_per_subdiv >= 8.0f;
+
+    for (int i = start_subdiv; i <= end_subdiv; ++i) {
+        bool is_beat = (i % subdivisions_per_beat_ == 0);
+        if (!is_beat && !draw_subdivisions) continue;
+
+        float x = canvas_pos.x + static_cast<float>(i) * pixels_per_subdiv - scroll_offset_;
+        if (x < canvas_pos.x - 1.0f || x > canvas_pos.x + canvas_size.x + 1.0f) continue;
+
+        ImU32 color = is_beat ? IM_COL32(100, 100, 110, 255) : IM_COL32(50, 50, 55, 255);
+        draw_list->AddRectFilled(
+            ImVec2(x, canvas_pos.y),
+            ImVec2(x + 1.0f, canvas_pos.y + canvas_size.y),
+            color
+        );
+    }
+
+    if (pattern_library_ && !overlay_pattern_id_.empty()) {
+        const Pattern* overlay_pattern = pattern_library_->find_pattern(overlay_pattern_id_);
+        if (overlay_pattern) {
+            for (const auto& trigger : overlay_pattern->triggers) {
+                int subdiv = trigger.subdivision_index;
+                if (subdiv < start_subdiv || subdiv > end_subdiv) continue;
+
+                float x = canvas_pos.x + static_cast<float>(subdiv) * pixels_per_subdiv - scroll_offset_;
+                if (x < canvas_pos.x - 1.0f || x > canvas_pos.x + canvas_size.x + 1.0f) continue;
+
+                draw_list->AddRectFilled(
+                    ImVec2(x, canvas_pos.y),
+                    ImVec2(x + pixels_per_subdiv * 0.8f, canvas_pos.y + canvas_size.y),
+                    IM_COL32(255, 180, 50, 40)
+                );
+
+                draw_list->AddRectFilled(
+                    ImVec2(x, canvas_pos.y),
+                    ImVec2(x + 2.0f, canvas_pos.y + canvas_size.y),
+                    IM_COL32(255, 180, 50, 150)
+                );
+            }
+        }
+    }
+
+    for (size_t i = 0; i < track.notes.size(); ++i) {
+        const auto& note = track.notes[i];
+
+        float x = canvas_pos.x + static_cast<float>(note.subdivision_index) * pixels_per_subdiv - scroll_offset_;
+        if (x < canvas_pos.x - 15.0f || x > canvas_pos.x + canvas_size.x + 15.0f) continue;
+
+        float y = midi_to_y(note.midi_note, canvas_pos.y, canvas_size.y);
+
+        bool is_selected = selected_note_indices_.count(static_cast<int>(i)) > 0;
+        ImU32 color = is_selected ? IM_COL32(100, 200, 255, 255) : IM_COL32(50, 150, 255, 255);
+
+        float note_width = pixels_per_subdiv * 0.8f;
+        draw_list->AddRectFilled(
+            ImVec2(x, y - note_height * 0.4f),
+            ImVec2(x + note_width, y + note_height * 0.4f),
+            color
+        );
+
+        if (is_selected) {
+            draw_list->AddRect(
+                ImVec2(x - 1, y - note_height * 0.4f - 1),
+                ImVec2(x + note_width + 1, y + note_height * 0.4f + 1),
+                IM_COL32(255, 255, 255, 200)
+            );
+        }
+
+        std::string name = note.note_name();
+        ImVec2 text_size = ImGui::CalcTextSize(name.c_str());
+        if (text_size.x < note_width - 4) {
+            draw_list->AddText(
+                ImVec2(x + 2, y - text_size.y * 0.5f),
+                IM_COL32(255, 255, 255, 255), name.c_str()
+            );
+        }
+    }
+
+    if (box_selecting_) {
+        float min_x = std::min(box_select_start_x_, box_select_end_x_);
+        float max_x = std::max(box_select_start_x_, box_select_end_x_);
+        float min_y = std::min(box_select_start_y_, box_select_end_y_);
+        float max_y = std::max(box_select_start_y_, box_select_end_y_);
+
+        draw_list->AddRectFilled(
+            ImVec2(min_x, min_y),
+            ImVec2(max_x, max_y),
+            IM_COL32(100, 150, 255, 50)
+        );
+        draw_list->AddRect(
+            ImVec2(min_x, min_y),
+            ImVec2(max_x, max_y),
+            IM_COL32(100, 150, 255, 200), 0.0f, 0, 1.0f
+        );
+    }
+
+    float playhead_subdivision = static_cast<float>(playhead_beat_ * subdivisions_per_beat_);
+    float track_length_subdivs = static_cast<float>(track.length_subdivisions);
+    if (track_length_subdivs > 0.0f) {
+        float wrapped_subdivision = std::fmod(playhead_subdivision, track_length_subdivs);
+        if (wrapped_subdivision < 0.0f) {
+            wrapped_subdivision += track_length_subdivs;
+        }
+        float playhead_x = canvas_pos.x + wrapped_subdivision * pixels_per_subdiv - scroll_offset_;
+        if (playhead_x >= canvas_pos.x && playhead_x <= canvas_pos.x + canvas_size.x) {
+            draw_list->AddLine(
+                ImVec2(playhead_x, canvas_pos.y),
+                ImVec2(playhead_x, canvas_pos.y + canvas_size.y),
+                IM_COL32(255, 80, 80, 255), 2.0f
+            );
+        }
+    }
+
+    draw_list->PopClipRect();
+
+    ImGui::InvisibleButton("pitch_grid", canvas_size);
+}
 void PitchEditorWindow::render_note_properties(PitchTrack& /*track*/) {}
 void PitchEditorWindow::estimate_from_bgm(PitchTrack& /*track*/) {}
 void PitchEditorWindow::handle_keyboard_shortcuts(PitchTrack& /*track*/) {}
