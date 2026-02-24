@@ -432,6 +432,233 @@ void PitchEditorWindow::render_grid(PitchTrack& track) {
     draw_list->PopClipRect();
 
     ImGui::InvisibleButton("pitch_grid", canvas_size);
+
+    bool is_hovered = ImGui::IsItemHovered();
+    bool is_focused = ImGui::IsWindowFocused();
+
+    if (is_hovered) {
+        float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.0f) {
+            if (ImGui::GetIO().KeyAlt) {
+                vertical_zoom_ = std::clamp(vertical_zoom_ * (1.0f + wheel * 0.1f), 0.5f, 4.0f);
+            } else if (ImGui::GetIO().KeyCtrl) {
+                float old_zoom = zoom_;
+                zoom_ = std::clamp(zoom_ * (1.0f + wheel * 0.1f), 0.1f, 10.0f);
+
+                ImVec2 mouse = ImGui::GetMousePos();
+                float mouse_rel = mouse.x - canvas_pos.x;
+                float subdiv_at_mouse = (scroll_offset_ + mouse_rel) / (BASE_PIXELS_PER_SUBDIVISION * old_zoom);
+                scroll_offset_ = subdiv_at_mouse * BASE_PIXELS_PER_SUBDIVISION * zoom_ - mouse_rel;
+                scroll_offset_ = std::max(0.0f, scroll_offset_);
+            } else {
+                scroll_offset_ = std::max(0.0f, scroll_offset_ - wheel * 50.0f);
+            }
+        }
+    }
+
+    if (is_focused && !renaming_) {
+        handle_keyboard_shortcuts(track);
+    }
+
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        ImVec2 mouse = ImGui::GetMousePos();
+        float rel_x = mouse.x - canvas_pos.x + scroll_offset_;
+
+        int subdivision = static_cast<int>(rel_x / pixels_per_subdiv);
+        subdivision = std::clamp(subdivision, 0, track.length_subdivisions - 1);
+
+        int midi_note = y_to_midi(mouse.y, canvas_pos.y, canvas_size.y);
+        midi_note = std::clamp(midi_note, MIN_MIDI_NOTE, MAX_MIDI_NOTE);
+
+        int found_index = -1;
+        for (size_t i = 0; i < track.notes.size(); ++i) {
+            const auto& note = track.notes[i];
+            float note_x = canvas_pos.x + static_cast<float>(note.subdivision_index) * pixels_per_subdiv - scroll_offset_;
+            float note_y = midi_to_y(note.midi_note, canvas_pos.y, canvas_size.y);
+            float note_width = pixels_per_subdiv * 0.8f;
+
+            if (mouse.x >= note_x && mouse.x <= note_x + note_width &&
+                std::abs(mouse.y - note_y) < note_height * 0.5f) {
+                found_index = static_cast<int>(i);
+                break;
+            }
+        }
+
+        if (found_index >= 0) {
+            if (ImGui::GetIO().KeyCtrl) {
+                if (selected_note_indices_.count(found_index)) {
+                    selected_note_indices_.erase(found_index);
+                } else {
+                    selected_note_indices_.insert(found_index);
+                }
+            } else if (ImGui::GetIO().KeyShift && !selected_note_indices_.empty()) {
+                int anchor = *selected_note_indices_.begin();
+                int start = std::min(anchor, found_index);
+                int end = std::max(anchor, found_index);
+                for (int idx = start; idx <= end; ++idx) {
+                    selected_note_indices_.insert(idx);
+                }
+            } else {
+                selected_note_indices_.clear();
+                selected_note_indices_.insert(found_index);
+            }
+        } else {
+            pending_had_selection_ = !selected_note_indices_.empty();
+            box_selecting_ = true;
+            box_select_start_x_ = mouse.x;
+            box_select_start_y_ = mouse.y;
+            box_select_end_x_ = mouse.x;
+            box_select_end_y_ = mouse.y;
+            pending_click_subdivision_ = subdivision;
+            pending_click_midi_note_ = midi_note;
+            if (!ImGui::GetIO().KeyCtrl) {
+                selected_note_indices_.clear();
+            }
+        }
+    }
+
+    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        ImVec2 mouse = ImGui::GetMousePos();
+
+        if (box_selecting_) {
+            box_select_end_x_ = mouse.x;
+            box_select_end_y_ = mouse.y;
+
+            float min_x = std::min(box_select_start_x_, box_select_end_x_);
+            float max_x = std::max(box_select_start_x_, box_select_end_x_);
+            float min_y = std::min(box_select_start_y_, box_select_end_y_);
+            float max_y = std::max(box_select_start_y_, box_select_end_y_);
+
+            if (!ImGui::GetIO().KeyCtrl) {
+                selected_note_indices_.clear();
+            }
+
+            for (size_t i = 0; i < track.notes.size(); ++i) {
+                const auto& note = track.notes[i];
+                float note_x = canvas_pos.x + static_cast<float>(note.subdivision_index) * pixels_per_subdiv - scroll_offset_;
+                float note_y = midi_to_y(note.midi_note, canvas_pos.y, canvas_size.y);
+                float note_width = pixels_per_subdiv * 0.8f;
+
+                float note_center_x = note_x + note_width * 0.5f;
+
+                if (note_center_x >= min_x && note_center_x <= max_x &&
+                    note_y >= min_y && note_y <= max_y) {
+                    selected_note_indices_.insert(static_cast<int>(i));
+                }
+            }
+        } else if (!selected_note_indices_.empty()) {
+            int midi_note = y_to_midi(mouse.y, canvas_pos.y, canvas_size.y);
+            midi_note = std::clamp(midi_note, MIN_MIDI_NOTE, MAX_MIDI_NOTE);
+
+            if (selected_note_indices_.size() == 1) {
+                int idx = *selected_note_indices_.begin();
+                if (!editing_) {
+                    begin_edit(track);
+                }
+                track.notes[idx].midi_note = midi_note;
+            }
+        }
+    }
+
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        bool did_drag_note = editing_ && !box_selecting_ && selected_note_indices_.size() == 1;
+        int dragged_note_subdivision = -1;
+        if (did_drag_note) {
+            int idx = *selected_note_indices_.begin();
+            if (idx >= 0 && idx < static_cast<int>(track.notes.size())) {
+                dragged_note_subdivision = track.notes[idx].subdivision_index;
+            }
+        }
+
+        if (box_selecting_) {
+            float drag_dist = std::abs(box_select_end_x_ - box_select_start_x_) +
+                              std::abs(box_select_end_y_ - box_select_start_y_);
+
+            if (drag_dist < 5.0f && pending_click_subdivision_ >= 0 && pending_click_midi_note_ >= 0) {
+                if (!pending_had_selection_) {
+                    int existing_at_subdiv = -1;
+                    for (size_t i = 0; i < track.notes.size(); ++i) {
+                        if (track.notes[i].subdivision_index == pending_click_subdivision_) {
+                            existing_at_subdiv = static_cast<int>(i);
+                            break;
+                        }
+                    }
+
+                    if (existing_at_subdiv >= 0) {
+                        begin_edit(track);
+                        track.notes[existing_at_subdiv].midi_note = pending_click_midi_note_;
+                        selected_note_indices_.clear();
+                        selected_note_indices_.insert(existing_at_subdiv);
+                        end_edit(track);
+                        trigger_preview(track, pending_click_subdivision_);
+                    } else {
+                        begin_edit(track);
+                        PitchNote note;
+                        note.subdivision_index = pending_click_subdivision_;
+                        note.midi_note = pending_click_midi_note_;
+                        track.notes.push_back(note);
+                        selected_note_indices_.clear();
+                        selected_note_indices_.insert(static_cast<int>(track.notes.size()) - 1);
+                        end_edit(track);
+                        trigger_preview(track, pending_click_subdivision_);
+                    }
+                }
+            }
+
+            box_selecting_ = false;
+            pending_click_subdivision_ = -1;
+            pending_click_midi_note_ = -1;
+        }
+        if (editing_) {
+            end_edit(track);
+            if (did_drag_note && dragged_note_subdivision >= 0) {
+                trigger_preview(track, dragged_note_subdivision);
+            }
+        }
+    }
+
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        ImVec2 mouse = ImGui::GetMousePos();
+
+        for (size_t i = 0; i < track.notes.size(); ++i) {
+            const auto& note = track.notes[i];
+            float note_x = canvas_pos.x + static_cast<float>(note.subdivision_index) * pixels_per_subdiv - scroll_offset_;
+            float note_y = midi_to_y(note.midi_note, canvas_pos.y, canvas_size.y);
+            float note_width = pixels_per_subdiv * 0.8f;
+
+            if (mouse.x >= note_x && mouse.x <= note_x + note_width &&
+                std::abs(mouse.y - note_y) < note_height * 0.5f) {
+
+                begin_edit(track);
+
+                if (selected_note_indices_.count(static_cast<int>(i))) {
+                    std::vector<int> to_delete(selected_note_indices_.begin(), selected_note_indices_.end());
+                    std::sort(to_delete.rbegin(), to_delete.rend());
+                    for (int idx : to_delete) {
+                        if (idx < static_cast<int>(track.notes.size())) {
+                            track.notes.erase(track.notes.begin() + idx);
+                        }
+                    }
+                    selected_note_indices_.clear();
+                } else {
+                    track.notes.erase(track.notes.begin() + i);
+                    selected_note_indices_.erase(static_cast<int>(i));
+                    std::set<int> adjusted;
+                    for (int idx : selected_note_indices_) {
+                        if (idx > static_cast<int>(i)) {
+                            adjusted.insert(idx - 1);
+                        } else {
+                            adjusted.insert(idx);
+                        }
+                    }
+                    selected_note_indices_ = adjusted;
+                }
+
+                end_edit(track);
+                break;
+            }
+        }
+    }
 }
 void PitchEditorWindow::render_note_properties(PitchTrack& /*track*/) {}
 void PitchEditorWindow::estimate_from_bgm(PitchTrack& /*track*/) {}
