@@ -660,13 +660,199 @@ void PitchEditorWindow::render_grid(PitchTrack& track) {
         }
     }
 }
-void PitchEditorWindow::render_note_properties(PitchTrack& /*track*/) {}
-void PitchEditorWindow::estimate_from_bgm(PitchTrack& /*track*/) {}
-void PitchEditorWindow::handle_keyboard_shortcuts(PitchTrack& /*track*/) {}
-void PitchEditorWindow::select_all_notes(const PitchTrack& /*track*/) {}
-void PitchEditorWindow::shift_selected_notes(PitchTrack& /*track*/, int /*semitones*/) {}
-void PitchEditorWindow::clamp_scroll(const PitchTrack& /*track*/) {}
-void PitchEditorWindow::trigger_preview(const PitchTrack& /*track*/, int /*subdivision*/) {}
+
+void PitchEditorWindow::handle_keyboard_shortcuts(PitchTrack& track) {
+    bool ctrl = ImGui::GetIO().KeyCtrl;
+    bool shift = ImGui::GetIO().KeyShift;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+        play_toggle_requested_ = true;
+    }
+
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) {
+        select_all_notes(track);
+    }
+
+    if (shift && !ctrl && ImGui::IsKeyPressed(ImGuiKey_UpArrow, false)) {
+        shift_selected_notes(track, 1);
+        ImGui::GetIO().WantCaptureKeyboard = true;
+    }
+
+    if (shift && !ctrl && ImGui::IsKeyPressed(ImGuiKey_DownArrow, false)) {
+        shift_selected_notes(track, -1);
+        ImGui::GetIO().WantCaptureKeyboard = true;
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) {
+        if (!selected_note_indices_.empty()) {
+            begin_edit(track);
+            std::vector<int> to_delete(selected_note_indices_.begin(), selected_note_indices_.end());
+            std::sort(to_delete.rbegin(), to_delete.rend());
+            for (int idx : to_delete) {
+                if (idx < static_cast<int>(track.notes.size())) {
+                    track.notes.erase(track.notes.begin() + idx);
+                }
+            }
+            selected_note_indices_.clear();
+            end_edit(track);
+        }
+    }
+}
+
+void PitchEditorWindow::select_all_notes(const PitchTrack& track) {
+    selected_note_indices_.clear();
+    for (size_t i = 0; i < track.notes.size(); ++i) {
+        selected_note_indices_.insert(static_cast<int>(i));
+    }
+}
+
+void PitchEditorWindow::shift_selected_notes(PitchTrack& track, int semitones) {
+    if (selected_note_indices_.empty()) return;
+
+    begin_edit(track);
+    int first_subdivision = -1;
+    for (int idx : selected_note_indices_) {
+        if (idx >= 0 && idx < static_cast<int>(track.notes.size())) {
+            int new_midi = track.notes[idx].midi_note + semitones;
+            new_midi = std::clamp(new_midi, MIN_MIDI_NOTE, MAX_MIDI_NOTE);
+            track.notes[idx].midi_note = new_midi;
+            if (first_subdivision < 0) {
+                first_subdivision = track.notes[idx].subdivision_index;
+            }
+        }
+    }
+    end_edit(track);
+
+    if (first_subdivision >= 0) {
+        trigger_preview(track, first_subdivision);
+    }
+}
+
+void PitchEditorWindow::clamp_scroll(const PitchTrack& track) {
+    float pixels_per_subdiv = BASE_PIXELS_PER_SUBDIVISION * zoom_;
+    float max_scroll = track.length_subdivisions * pixels_per_subdiv - last_canvas_width_;
+    scroll_offset_ = std::clamp(scroll_offset_, 0.0f, std::max(0.0f, max_scroll));
+}
+
+void PitchEditorWindow::render_note_properties(PitchTrack& track) {
+    if (selected_note_indices_.empty()) {
+        ImGui::Text("Click on the grid to add notes, right-click to delete");
+        return;
+    }
+
+    if (selected_note_indices_.size() > 1) {
+        ImGui::Text("%zu notes selected", selected_note_indices_.size());
+        ImGui::Text("Shift+Up/Down to transpose by semitone");
+
+        if (ImGui::Button("Delete Selected")) {
+            begin_edit(track);
+            std::vector<int> to_delete(selected_note_indices_.begin(), selected_note_indices_.end());
+            std::sort(to_delete.rbegin(), to_delete.rend());
+            for (int idx : to_delete) {
+                if (idx < static_cast<int>(track.notes.size())) {
+                    track.notes.erase(track.notes.begin() + idx);
+                }
+            }
+            selected_note_indices_.clear();
+            end_edit(track);
+        }
+        return;
+    }
+
+    int selected_idx = *selected_note_indices_.begin();
+    if (selected_idx < 0 || selected_idx >= static_cast<int>(track.notes.size())) {
+        ImGui::Text("Invalid selection");
+        return;
+    }
+
+    auto& note = track.notes[selected_idx];
+
+    ImGui::Text("Note at subdivision %d", note.subdivision_index);
+
+    ImGui::Text("Note: %s", note.note_name().c_str());
+
+    int midi = note.midi_note;
+    if (ImGui::SliderInt("MIDI Note", &midi, MIN_MIDI_NOTE, MAX_MIDI_NOTE)) {
+        if (!editing_) {
+            begin_edit(track);
+        }
+        note.midi_note = midi;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        end_edit(track);
+    }
+
+    float cents = note.fine_tune_cents;
+    if (ImGui::SliderFloat("Fine Tune (cents)", &cents, -100.0f, 100.0f, "%.1f")) {
+        if (!editing_) {
+            begin_edit(track);
+        }
+        note.fine_tune_cents = cents;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        end_edit(track);
+    }
+
+    ImGui::Text("Frequency: %.2f Hz", note.frequency_hz());
+
+    if (ImGui::Button("Delete Note")) {
+        begin_edit(track);
+        track.notes.erase(track.notes.begin() + selected_idx);
+        selected_note_indices_.clear();
+        end_edit(track);
+    }
+}
+
+void PitchEditorWindow::estimate_from_bgm(PitchTrack& track) {
+    if (!audio_clip_ || !audio_clip_->is_loaded() || !tempo_) {
+        return;
+    }
+
+    begin_edit(track);
+    track.notes.clear();
+
+    double bpm = tempo_->bpm();
+    double seconds_per_beat = 60.0 / bpm;
+    double seconds_per_subdiv = seconds_per_beat / static_cast<double>(subdivisions_per_beat_);
+
+    uint32_t sample_rate = audio_clip_->sample_rate();
+    uint32_t channels = audio_clip_->channels();
+    const float* audio_data = audio_clip_->data();
+    size_t total_samples = audio_clip_->sample_count();
+
+    constexpr size_t WINDOW_SAMPLES = 4096;
+
+    for (int subdiv = 0; subdiv < track.length_subdivisions; ++subdiv) {
+        double time_seconds = subdiv * seconds_per_subdiv;
+        size_t sample_start = static_cast<size_t>(time_seconds * sample_rate) * channels;
+
+        if (sample_start + WINDOW_SAMPLES * channels > total_samples) {
+            break;
+        }
+
+        std::vector<float> mono(WINDOW_SAMPLES);
+        for (size_t i = 0; i < WINDOW_SAMPLES; ++i) {
+            float sum = 0.0f;
+            for (uint32_t c = 0; c < channels; ++c) {
+                sum += audio_data[sample_start + i * channels + c];
+            }
+            mono[i] = sum / static_cast<float>(channels);
+        }
+
+        PitchResult result = PitchEstimator::estimate(
+            mono.data(), mono.size(), sample_rate, PitchAlgorithm::YIN
+        );
+
+        if (result.confidence > 0.5f && result.midi_note >= MIN_MIDI_NOTE && result.midi_note <= MAX_MIDI_NOTE) {
+            PitchNote note;
+            note.subdivision_index = subdiv;
+            note.midi_note = result.midi_note;
+            track.notes.push_back(note);
+        }
+    }
+
+    end_edit(track);
+}
 
 void PitchEditorWindow::begin_edit(const PitchTrack& track) {
     if (!editing_) {
@@ -696,6 +882,19 @@ int PitchEditorWindow::y_to_midi(float y, float canvas_y, float canvas_height) c
     float center_offset = (zoomed_height - canvas_height) * 0.5f;
     float normalized = 1.0f - (y - canvas_y + center_offset) / zoomed_height;
     return MIN_MIDI_NOTE + static_cast<int>(normalized * NOTE_RANGE);
+}
+
+void PitchEditorWindow::trigger_preview(const PitchTrack& track, int subdivision) {
+    if (!preview_enabled_ || !preview_callback_) {
+        return;
+    }
+
+    for (const auto& note : track.notes) {
+        if (note.subdivision_index == subdivision) {
+            preview_callback_(subdivision, note.midi_note, preview_duration_, bgm_volume_, clip_volume_);
+            return;
+        }
+    }
 }
 
 bool PitchEditorWindow::consume_play_toggle_request() {
