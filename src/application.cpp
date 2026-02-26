@@ -4,6 +4,8 @@
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 #include <nfd.h>
+#include <thread>
+#include <chrono>
 
 namespace furious {
 
@@ -94,8 +96,43 @@ void Application::run() {
 
     while (!glfwWindowShouldClose(window_)) {
         glfwPollEvents();
-        render_frame();
+        if (should_render_frame()) {
+            render_frame();
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
     }
+}
+
+bool Application::should_render_frame() {
+    double mouse_x, mouse_y;
+    glfwGetCursorPos(window_, &mouse_x, &mouse_y);
+
+    bool mouse_moved = (mouse_x != last_mouse_x_ || mouse_y != last_mouse_y_);
+    last_mouse_x_ = mouse_x;
+    last_mouse_y_ = mouse_y;
+
+    bool has_input = mouse_moved ||
+                     glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS ||
+                     glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ||
+                     glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+
+    for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; ++key) {
+        if (glfwGetKey(window_, key) == GLFW_PRESS) {
+            has_input = true;
+            break;
+        }
+    }
+
+    bool is_playing = main_window_ && main_window_->is_playing();
+
+    if (has_input || is_playing) {
+        idle_frames_ = 0;
+        return true;
+    }
+
+    ++idle_frames_;
+    return (idle_frames_ % IDLE_FRAME_SKIP) == 0;
 }
 
 void Application::set_initial_project(const std::string& filepath) {
