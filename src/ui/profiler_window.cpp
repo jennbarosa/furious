@@ -137,7 +137,7 @@ void ProfilerWindow::render() {
 
         ImGui::PlotLines("##frame_time", ordered.data(), static_cast<int>(HISTORY_SIZE),
                          0, "Frame Time (ms)", 0.0f, max_ft * 1.2f,
-                         ImVec2(ImGui::GetContentRegionAvail().x, 50));
+                         ImVec2(ImGui::GetContentRegionAvail().x, 30));
     }
 
     ImGui::Separator();
@@ -159,7 +159,7 @@ void ProfilerWindow::render() {
 
         ImGui::PlotLines("##allocs", ordered.data(), static_cast<int>(HISTORY_SIZE),
                          0, "Allocs/frame", 0.0f, max_alloc * 1.2f,
-                         ImVec2(ImGui::GetContentRegionAvail().x, 50));
+                         ImVec2(ImGui::GetContentRegionAvail().x, 30));
     }
 
     ImGui::Separator();
@@ -172,7 +172,7 @@ void ProfilerWindow::render() {
         }
         ImGui::PlotLines("##cpu", ordered.data(), static_cast<int>(HISTORY_SIZE),
                          0, "CPU %", 0.0f, 100.0f,
-                         ImVec2(ImGui::GetContentRegionAvail().x, 50));
+                         ImVec2(ImGui::GetContentRegionAvail().x, 30));
     }
 
     ImGui::Separator();
@@ -188,7 +188,7 @@ void ProfilerWindow::render() {
 
         ImGui::PlotLines("##memory", ordered.data(), static_cast<int>(HISTORY_SIZE),
                          0, "Memory (MB)", 0.0f, max_mem,
-                         ImVec2(ImGui::GetContentRegionAvail().x, 50));
+                         ImVec2(ImGui::GetContentRegionAvail().x, 30));
     }
 
     ImGui::End();
