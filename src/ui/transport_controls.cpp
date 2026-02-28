@@ -9,7 +9,10 @@ namespace furious {
 TransportControls::TransportControls(Project& project) : project_(project) {}
 
 void TransportControls::render() {
-    ImGui::Begin("Project");
+    if (!ImGui::Begin("Project")) {
+        ImGui::End();
+        return;
+    }
 
     if (ImGui::Button(is_playing_ ? "Stop" : "Play")) {
         is_playing_ = !is_playing_;
