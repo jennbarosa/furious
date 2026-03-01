@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 
 namespace furious {
@@ -38,8 +39,17 @@ private:
 
     PatternTargetProperty current_property_ = PatternTargetProperty::ScaleX;
     float current_value_ = 1.0f;
-    int selected_trigger_index_ = -1;
+    std::set<int> selected_trigger_indices_;
     int snap_subdivisions_per_beat_ = 4;
+
+    bool box_selecting_ = false;
+    float box_select_start_x_ = 0.0f;
+    float box_select_start_y_ = 0.0f;
+    float box_select_end_x_ = 0.0f;
+    float box_select_end_y_ = 0.0f;
+    int pending_click_subdivision_ = -1;
+    float pending_click_value_ = 0.0f;
+    bool pending_had_selection_ = false;
 
     float zoom_ = 1.0f;
     float scroll_offset_ = 0.0f;

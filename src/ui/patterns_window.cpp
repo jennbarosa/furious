@@ -8,7 +8,10 @@
 namespace furious {
 
 void PatternsWindow::render() {
-    ImGui::Begin("Patterns");
+    if (!ImGui::Begin("Patterns")) {
+        ImGui::End();
+        return;
+    }
 
     if (!library_) {
         ImGui::Text("No pattern library available");
@@ -48,19 +51,26 @@ void PatternsWindow::render_pattern_list() {
     ImGui::Separator();
 
     ImGui::InputTextWithHint("##search", "Search...", search_buffer_, sizeof(search_buffer_));
-    std::string filter(search_buffer_);
 
     ImGui::Separator();
 
     for (const auto& pattern : library_->patterns()) {
-        if (!filter.empty()) {
-            std::string name_lower = pattern.name;
-            std::string filter_lower = filter;
-            std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
-            std::transform(filter_lower.begin(), filter_lower.end(), filter_lower.begin(), ::tolower);
-            if (name_lower.find(filter_lower) == std::string::npos) {
-                continue;
+        if (search_buffer_[0] != '\0') {
+            bool found = false;
+            const char* name = pattern.name.c_str();
+            const char* filter = search_buffer_;
+            for (size_t i = 0; name[i] != '\0'; ++i) {
+                bool match = true;
+                for (size_t j = 0; filter[j] != '\0'; ++j) {
+                    if (std::tolower(static_cast<unsigned char>(name[i + j])) !=
+                        std::tolower(static_cast<unsigned char>(filter[j]))) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) { found = true; break; }
             }
+            if (!found) continue;
         }
 
         ImGui::PushID(pattern.id.c_str());
@@ -180,7 +190,7 @@ void PatternsWindow::render_pattern_editor() {
         }
         if (ImGui::Button(property_name(prop))) {
             current_property_ = prop;
-            selected_trigger_index_ = -1;
+            selected_trigger_indices_.clear();
         }
         if (selected) {
             ImGui::PopStyleColor();
@@ -206,6 +216,18 @@ void PatternsWindow::render_pattern_editor() {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("(%s)", prop_settings.restart_on_trigger ? "ON" : "OFF");
+
+    ImGui::Text("Restart offset (beats):");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.0f);
+    float restart_offset = static_cast<float>(pattern->restart_offset_beats);
+    if (ImGui::InputFloat("##restart_offset", &restart_offset, 0.25f, 1.0f, "%.2f")) {
+        begin_edit(*pattern);
+        pattern->restart_offset_beats = std::max(0.0, static_cast<double>(restart_offset));
+        end_edit(*pattern);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(start position when clip restarts)");
 
     ImGui::Separator();
 
@@ -270,11 +292,33 @@ void PatternsWindow::render_grid(Pattern& pattern) {
         float normalized = normalize_value(trigger.value, current_property_);
         float y = canvas_pos.y + canvas_size.y * (1.0f - normalized);
 
-        bool is_selected = (static_cast<int>(i) == selected_trigger_index_);
+        bool is_selected = selected_trigger_indices_.count(static_cast<int>(i)) > 0;
         ImU32 color = is_selected ? IM_COL32(255, 200, 100, 255) : IM_COL32(255, 150, 50, 255);
 
         draw_list->AddCircleFilled(ImVec2(x, y), 8.0f, color);
         draw_list->AddCircle(ImVec2(x, y), 8.0f, IM_COL32(255, 255, 255, 180), 0, 2.0f);
+    }
+
+    if (box_selecting_) {
+        float drag_dist = std::abs(box_select_end_x_ - box_select_start_x_) +
+                          std::abs(box_select_end_y_ - box_select_start_y_);
+        if (drag_dist >= 5.0f) {
+            float min_x = std::min(box_select_start_x_, box_select_end_x_);
+            float max_x = std::max(box_select_start_x_, box_select_end_x_);
+            float min_y = std::min(box_select_start_y_, box_select_end_y_);
+            float max_y = std::max(box_select_start_y_, box_select_end_y_);
+
+            draw_list->AddRectFilled(
+                ImVec2(min_x, min_y),
+                ImVec2(max_x, max_y),
+                IM_COL32(255, 180, 100, 50)
+            );
+            draw_list->AddRect(
+                ImVec2(min_x, min_y),
+                ImVec2(max_x, max_y),
+                IM_COL32(255, 180, 100, 200), 0.0f, 0, 1.0f
+            );
+        }
     }
 
     ImGui::InvisibleButton("grid", canvas_size);
@@ -311,66 +355,147 @@ void PatternsWindow::render_grid(Pattern& pattern) {
             if (t.target != current_property_) continue;
 
             float trigger_screen_x = canvas_pos.x + static_cast<float>(t.subdivision_index) * pixels_per_subdiv - scroll_offset_;
-            float distance = std::fabs(mouse.x - trigger_screen_x);
-            if (distance < 10.0f) {
+            float trigger_normalized = normalize_value(t.value, current_property_);
+            float trigger_screen_y = canvas_pos.y + canvas_size.y * (1.0f - trigger_normalized);
+            float dist_x = std::fabs(mouse.x - trigger_screen_x);
+            float dist_y = std::fabs(mouse.y - trigger_screen_y);
+            if (dist_x < 10.0f && dist_y < 10.0f) {
                 found_index = static_cast<int>(i);
                 break;
             }
         }
 
         if (found_index >= 0) {
-            selected_trigger_index_ = found_index;
-        } else {
-            int existing_at_subdiv = -1;
-            for (size_t i = 0; i < pattern.triggers.size(); ++i) {
-                const auto& t = pattern.triggers[i];
-                if (t.target == current_property_ && t.subdivision_index == subdivision) {
-                    existing_at_subdiv = static_cast<int>(i);
-                    break;
+            if (ImGui::GetIO().KeyCtrl) {
+                if (selected_trigger_indices_.count(found_index)) {
+                    selected_trigger_indices_.erase(found_index);
+                } else {
+                    selected_trigger_indices_.insert(found_index);
                 }
-            }
-
-            if (existing_at_subdiv >= 0) {
-                selected_trigger_index_ = existing_at_subdiv;
+            } else if (ImGui::GetIO().KeyShift && !selected_trigger_indices_.empty()) {
+                int anchor = *selected_trigger_indices_.begin();
+                int start = std::min(anchor, found_index);
+                int end = std::max(anchor, found_index);
+                for (int idx = start; idx <= end; ++idx) {
+                    if (idx < static_cast<int>(pattern.triggers.size()) &&
+                        pattern.triggers[idx].target == current_property_) {
+                        selected_trigger_indices_.insert(idx);
+                    }
+                }
             } else {
-                begin_edit(pattern);
+                selected_trigger_indices_.clear();
+                selected_trigger_indices_.insert(found_index);
+            }
+        } else {
+            pending_had_selection_ = !selected_trigger_indices_.empty();
+            box_selecting_ = true;
+            box_select_start_x_ = mouse.x;
+            box_select_start_y_ = mouse.y;
+            box_select_end_x_ = mouse.x;
+            box_select_end_y_ = mouse.y;
 
-                float normalized = 1.0f - (rel_y / canvas_size.y);
-                normalized = std::clamp(normalized, 0.0f, 1.0f);
-                float value = denormalize_value(normalized, current_property_);
+            float normalized = 1.0f - (rel_y / canvas_size.y);
+            normalized = std::clamp(normalized, 0.0f, 1.0f);
+            pending_click_subdivision_ = subdivision;
+            pending_click_value_ = denormalize_value(normalized, current_property_);
 
-                PatternTrigger trigger;
-                trigger.subdivision_index = subdivision;
-                trigger.target = current_property_;
-                trigger.value = value;
-                pattern.triggers.push_back(trigger);
-
-                selected_trigger_index_ = static_cast<int>(pattern.triggers.size()) - 1;
-                end_edit(pattern);
+            if (!ImGui::GetIO().KeyCtrl) {
+                selected_trigger_indices_.clear();
             }
         }
     }
 
     if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-        if (selected_trigger_index_ >= 0 &&
-            selected_trigger_index_ < static_cast<int>(pattern.triggers.size())) {
-            auto& trigger = pattern.triggers[selected_trigger_index_];
-            if (trigger.target == current_property_) {
-                ImVec2 mouse = ImGui::GetMousePos();
-                float rel_y = mouse.y - canvas_pos.y;
-                float normalized = 1.0f - (rel_y / canvas_size.y);
-                normalized = std::clamp(normalized, 0.0f, 1.0f);
+        ImVec2 mouse = ImGui::GetMousePos();
 
-                if (!editing_) {
-                    begin_edit(pattern);
+        if (box_selecting_) {
+            box_select_end_x_ = mouse.x;
+            box_select_end_y_ = mouse.y;
+
+            float drag_dist = std::abs(box_select_end_x_ - box_select_start_x_) +
+                              std::abs(box_select_end_y_ - box_select_start_y_);
+
+            if (drag_dist >= 5.0f) {
+                float min_x = std::min(box_select_start_x_, box_select_end_x_);
+                float max_x = std::max(box_select_start_x_, box_select_end_x_);
+                float min_y = std::min(box_select_start_y_, box_select_end_y_);
+                float max_y = std::max(box_select_start_y_, box_select_end_y_);
+
+                if (!ImGui::GetIO().KeyCtrl) {
+                    selected_trigger_indices_.clear();
                 }
-                trigger.value = denormalize_value(normalized, current_property_);
+
+                for (size_t i = 0; i < pattern.triggers.size(); ++i) {
+                    const auto& t = pattern.triggers[i];
+                    if (t.target != current_property_) continue;
+
+                    float trigger_screen_x = canvas_pos.x + static_cast<float>(t.subdivision_index) * pixels_per_subdiv - scroll_offset_;
+                    float trigger_normalized = normalize_value(t.value, current_property_);
+                    float trigger_screen_y = canvas_pos.y + canvas_size.y * (1.0f - trigger_normalized);
+
+                    if (trigger_screen_x >= min_x && trigger_screen_x <= max_x &&
+                        trigger_screen_y >= min_y && trigger_screen_y <= max_y) {
+                        selected_trigger_indices_.insert(static_cast<int>(i));
+                    }
+                }
+            }
+        } else if (selected_trigger_indices_.size() == 1) {
+            int idx = *selected_trigger_indices_.begin();
+            if (idx >= 0 && idx < static_cast<int>(pattern.triggers.size())) {
+                auto& trigger = pattern.triggers[idx];
+                if (trigger.target == current_property_) {
+                    float rel_y = mouse.y - canvas_pos.y;
+                    float normalized = 1.0f - (rel_y / canvas_size.y);
+                    normalized = std::clamp(normalized, 0.0f, 1.0f);
+
+                    if (!editing_) {
+                        begin_edit(pattern);
+                    }
+                    trigger.value = denormalize_value(normalized, current_property_);
+                }
             }
         }
     }
 
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && editing_) {
-        end_edit(pattern);
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        if (box_selecting_) {
+            float drag_dist = std::abs(box_select_end_x_ - box_select_start_x_) +
+                              std::abs(box_select_end_y_ - box_select_start_y_);
+
+            if (drag_dist < 5.0f && pending_click_subdivision_ >= 0) {
+                if (!pending_had_selection_) {
+                    int existing_at_subdiv = -1;
+                    for (size_t i = 0; i < pattern.triggers.size(); ++i) {
+                        const auto& t = pattern.triggers[i];
+                        if (t.target == current_property_ && t.subdivision_index == pending_click_subdivision_) {
+                            existing_at_subdiv = static_cast<int>(i);
+                            break;
+                        }
+                    }
+
+                    if (existing_at_subdiv >= 0) {
+                        selected_trigger_indices_.clear();
+                        selected_trigger_indices_.insert(existing_at_subdiv);
+                    } else {
+                        begin_edit(pattern);
+                        PatternTrigger trigger;
+                        trigger.subdivision_index = pending_click_subdivision_;
+                        trigger.target = current_property_;
+                        trigger.value = pending_click_value_;
+                        pattern.triggers.push_back(trigger);
+                        selected_trigger_indices_.clear();
+                        selected_trigger_indices_.insert(static_cast<int>(pattern.triggers.size()) - 1);
+                        end_edit(pattern);
+                    }
+                }
+            }
+
+            box_selecting_ = false;
+            pending_click_subdivision_ = -1;
+        }
+        if (editing_) {
+            end_edit(pattern);
+        }
     }
 }
 
@@ -381,17 +506,162 @@ void PatternsWindow::clamp_scroll(const Pattern& pattern) {
 }
 
 void PatternsWindow::render_trigger_properties(Pattern& pattern) {
-    if (selected_trigger_index_ < 0 ||
-        selected_trigger_index_ >= static_cast<int>(pattern.triggers.size())) {
+    if (selected_trigger_indices_.empty()) {
         ImGui::Text("Click on the grid to add or select a trigger");
         return;
     }
 
-    auto& trigger = pattern.triggers[selected_trigger_index_];
+    if (selected_trigger_indices_.size() > 1) {
+        ImGui::Text("%zu triggers selected", selected_trigger_indices_.size());
+
+        ImGui::Separator();
+        ImGui::Text("Bulk Duration");
+
+        bool any_custom = false;
+        bool all_custom = true;
+        int common_duration = -1;
+        bool same_duration = true;
+
+        for (int idx : selected_trigger_indices_) {
+            if (idx >= 0 && idx < static_cast<int>(pattern.triggers.size())) {
+                const auto& t = pattern.triggers[idx];
+                if (t.duration_subdivisions > 0) {
+                    any_custom = true;
+                    if (common_duration < 0) {
+                        common_duration = t.duration_subdivisions;
+                    } else if (common_duration != t.duration_subdivisions) {
+                        same_duration = false;
+                    }
+                } else {
+                    all_custom = false;
+                }
+            }
+        }
+
+        bool use_custom = all_custom;
+        if (ImGui::Checkbox("Custom Duration", &use_custom)) {
+            begin_edit(pattern);
+            for (int idx : selected_trigger_indices_) {
+                if (idx >= 0 && idx < static_cast<int>(pattern.triggers.size())) {
+                    pattern.triggers[idx].duration_subdivisions = use_custom ? 4 : -1;
+                }
+            }
+            end_edit(pattern);
+        }
+        if (any_custom && !all_custom) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(mixed)");
+        }
+
+        if (any_custom && tempo_) {
+            double subdivs_per_beat = 4.0;
+            double ms_per_subdiv = (tempo_->beat_duration_seconds() / subdivs_per_beat) * 1000.0;
+            int max_ms = static_cast<int>(pattern.length_subdivisions * ms_per_subdiv);
+            int current_ms = same_duration && common_duration > 0
+                ? static_cast<int>(common_duration * ms_per_subdiv)
+                : static_cast<int>(4 * ms_per_subdiv);
+
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::SliderInt("ms##bulk_dur_ms", &current_ms, 1, max_ms)) {
+                if (!editing_) begin_edit(pattern);
+                int new_subdivs = std::max(1, static_cast<int>(std::round(current_ms / ms_per_subdiv)));
+                new_subdivs = std::min(new_subdivs, pattern.length_subdivisions);
+                for (int idx : selected_trigger_indices_) {
+                    if (idx >= 0 && idx < static_cast<int>(pattern.triggers.size())) {
+                        if (pattern.triggers[idx].duration_subdivisions > 0 || use_custom) {
+                            pattern.triggers[idx].duration_subdivisions = new_subdivs;
+                        }
+                    }
+                }
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                end_edit(pattern);
+            }
+            if (!same_duration) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(mixed)");
+            }
+
+            int quarter_subdivs = static_cast<int>(subdivs_per_beat);
+            int eighth_subdivs = static_cast<int>(subdivs_per_beat / 2);
+            int sixteenth_subdivs = static_cast<int>(subdivs_per_beat / 4);
+
+            ImGui::Text("Presets:");
+            ImGui::SameLine();
+            if (quarter_subdivs <= pattern.length_subdivisions) {
+                if (ImGui::SmallButton("1/4##bulk")) {
+                    begin_edit(pattern);
+                    for (int idx : selected_trigger_indices_) {
+                        if (idx >= 0 && idx < static_cast<int>(pattern.triggers.size())) {
+                            pattern.triggers[idx].duration_subdivisions = quarter_subdivs;
+                        }
+                    }
+                    end_edit(pattern);
+                }
+                ImGui::SameLine();
+            }
+            if (eighth_subdivs >= 1 && eighth_subdivs <= pattern.length_subdivisions) {
+                if (ImGui::SmallButton("1/8##bulk")) {
+                    begin_edit(pattern);
+                    for (int idx : selected_trigger_indices_) {
+                        if (idx >= 0 && idx < static_cast<int>(pattern.triggers.size())) {
+                            pattern.triggers[idx].duration_subdivisions = eighth_subdivs;
+                        }
+                    }
+                    end_edit(pattern);
+                }
+                ImGui::SameLine();
+            }
+            if (sixteenth_subdivs >= 1 && sixteenth_subdivs <= pattern.length_subdivisions) {
+                if (ImGui::SmallButton("1/16##bulk")) {
+                    begin_edit(pattern);
+                    for (int idx : selected_trigger_indices_) {
+                        if (idx >= 0 && idx < static_cast<int>(pattern.triggers.size())) {
+                            pattern.triggers[idx].duration_subdivisions = sixteenth_subdivs;
+                        }
+                    }
+                    end_edit(pattern);
+                }
+                ImGui::SameLine();
+            }
+            if (ImGui::SmallButton("Clear All##bulk")) {
+                begin_edit(pattern);
+                for (int idx : selected_trigger_indices_) {
+                    if (idx >= 0 && idx < static_cast<int>(pattern.triggers.size())) {
+                        pattern.triggers[idx].duration_subdivisions = -1;
+                    }
+                }
+                end_edit(pattern);
+            }
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::Button("Delete Selected")) {
+            begin_edit(pattern);
+            std::vector<int> to_delete(selected_trigger_indices_.begin(), selected_trigger_indices_.end());
+            std::sort(to_delete.rbegin(), to_delete.rend());
+            for (int idx : to_delete) {
+                if (idx < static_cast<int>(pattern.triggers.size())) {
+                    pattern.triggers.erase(pattern.triggers.begin() + idx);
+                }
+            }
+            selected_trigger_indices_.clear();
+            end_edit(pattern);
+        }
+        return;
+    }
+
+    int selected_idx = *selected_trigger_indices_.begin();
+    if (selected_idx < 0 || selected_idx >= static_cast<int>(pattern.triggers.size())) {
+        ImGui::Text("Invalid selection");
+        return;
+    }
+
+    auto& trigger = pattern.triggers[selected_idx];
 
     ImGui::Text("Trigger at subdivision %d", trigger.subdivision_index);
 
-    float old_value = trigger.value;
     if (ImGui::DragFloat("Value", &trigger.value, 0.01f)) {
         if (!editing_) {
             begin_edit(pattern);
@@ -401,10 +671,99 @@ void PatternsWindow::render_trigger_properties(Pattern& pattern) {
         end_edit(pattern);
     }
 
+    ImGui::Separator();
+    ImGui::Text("Duration");
+
+    int next_trigger_subdiv = -1;
+    for (const auto& t : pattern.triggers) {
+        if (t.subdivision_index > trigger.subdivision_index) {
+            if (next_trigger_subdiv < 0 || t.subdivision_index < next_trigger_subdiv) {
+                next_trigger_subdiv = t.subdivision_index;
+            }
+        }
+    }
+    if (next_trigger_subdiv < 0) {
+        for (const auto& t : pattern.triggers) {
+            if (t.subdivision_index < trigger.subdivision_index) {
+                if (next_trigger_subdiv < 0 || t.subdivision_index < next_trigger_subdiv) {
+                    next_trigger_subdiv = t.subdivision_index;
+                }
+            }
+        }
+        if (next_trigger_subdiv >= 0) {
+            next_trigger_subdiv += pattern.length_subdivisions;
+        }
+    }
+
+    int max_duration = (next_trigger_subdiv >= 0)
+        ? (next_trigger_subdiv - trigger.subdivision_index)
+        : pattern.length_subdivisions;
+    if (max_duration <= 0) max_duration = pattern.length_subdivisions;
+
+    bool use_custom = trigger.duration_subdivisions > 0;
+    if (ImGui::Checkbox("Custom Duration", &use_custom)) {
+        if (!editing_) begin_edit(pattern);
+        trigger.duration_subdivisions = use_custom ? std::min(4, max_duration) : -1;
+        end_edit(pattern);
+    }
+
+    if (use_custom && tempo_) {
+        double subdivs_per_beat = 4.0;
+        double ms_per_subdiv = (tempo_->beat_duration_seconds() / subdivs_per_beat) * 1000.0;
+        int max_ms = static_cast<int>(max_duration * ms_per_subdiv);
+        int current_ms = static_cast<int>(trigger.duration_subdivisions * ms_per_subdiv);
+
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::SliderInt("ms##dur_ms", &current_ms, 1, max_ms)) {
+            if (!editing_) begin_edit(pattern);
+            int new_subdivs = std::max(1, static_cast<int>(std::round(current_ms / ms_per_subdiv)));
+            new_subdivs = std::min(new_subdivs, max_duration);
+            trigger.duration_subdivisions = new_subdivs;
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            end_edit(pattern);
+        }
+
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%d subdivs)", trigger.duration_subdivisions);
+
+        int quarter_subdivs = static_cast<int>(subdivs_per_beat);
+        int eighth_subdivs = static_cast<int>(subdivs_per_beat / 2);
+        int sixteenth_subdivs = static_cast<int>(subdivs_per_beat / 4);
+
+        ImGui::Text("Presets:");
+        ImGui::SameLine();
+        if (quarter_subdivs <= max_duration) {
+            if (ImGui::SmallButton("1/4##single")) {
+                if (!editing_) begin_edit(pattern);
+                trigger.duration_subdivisions = quarter_subdivs;
+                end_edit(pattern);
+            }
+            ImGui::SameLine();
+        }
+        if (eighth_subdivs >= 1 && eighth_subdivs <= max_duration) {
+            if (ImGui::SmallButton("1/8##single")) {
+                if (!editing_) begin_edit(pattern);
+                trigger.duration_subdivisions = eighth_subdivs;
+                end_edit(pattern);
+            }
+            ImGui::SameLine();
+        }
+        if (sixteenth_subdivs >= 1 && sixteenth_subdivs <= max_duration) {
+            if (ImGui::SmallButton("1/16##single")) {
+                if (!editing_) begin_edit(pattern);
+                trigger.duration_subdivisions = sixteenth_subdivs;
+                end_edit(pattern);
+            }
+        }
+    }
+
+    ImGui::Separator();
+
     if (ImGui::Button("Delete Trigger")) {
         begin_edit(pattern);
-        pattern.triggers.erase(pattern.triggers.begin() + selected_trigger_index_);
-        selected_trigger_index_ = -1;
+        pattern.triggers.erase(pattern.triggers.begin() + selected_idx);
+        selected_trigger_indices_.clear();
         end_edit(pattern);
     }
 }
