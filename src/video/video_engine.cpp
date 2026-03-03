@@ -6,6 +6,7 @@
 #include <vector>
 #include <chrono>
 #include <cstdio>
+#include <cmath>
 
 namespace furious {
 
@@ -123,6 +124,22 @@ void VideoEngine::unregister_source(const std::string& source_id) {
         it->second.decoder->close();
     }
     impl_->sources.erase(it);
+}
+
+void VideoEngine::clear_sources() {
+    for (auto& [id, state] : impl_->clips) {
+        if (state.texture_id != 0) {
+            glDeleteTextures(1, &state.texture_id);
+        }
+    }
+    impl_->clips.clear();
+
+    for (auto& [id, state] : impl_->sources) {
+        if (state.decoder) {
+            state.decoder->close();
+        }
+    }
+    impl_->sources.clear();
 }
 
 void VideoEngine::begin_frame() {
@@ -416,14 +433,19 @@ void VideoEngine::request_looped_frame(const std::string& clip_id, const std::st
     clip.requested_this_frame = true;
     impl_->active_clip_ids.insert(clip_id);
 
-    bool params_changed = (clip.loop_source_start != source_start_seconds) ||
-                          (clip.loop_duration != loop_duration_seconds);
+    constexpr double EPSILON = 0.0001;
+    bool start_changed = std::abs(clip.loop_source_start - source_start_seconds) > EPSILON;
 
-    if (is_interactive_ && params_changed) {
+    // Only invalidate cache if start changed OR new duration is larger than cached
+    // This allows shorter intervals to reuse existing cached frames
+    bool duration_exceeds_cache = loop_duration_seconds > clip.loop_duration + EPSILON;
+    bool needs_rebuild = start_changed || (duration_exceeds_cache && clip.loop_cache_complete);
+
+    if (is_interactive_ && needs_rebuild) {
         return;
     }
 
-    if (params_changed) {
+    if (needs_rebuild) {
         double fps = source.decoder->fps();
         if (fps <= 0.0) fps = 30.0;
 
