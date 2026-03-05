@@ -2,7 +2,7 @@
 <img width="418" height="190" alt="image" src="https://github.com/user-attachments/assets/23fd3085-6673-4e03-9d36-0adf7a4645e2" />
 </p>
 
-
+Demonstration video: https://www.youtube.com/watch?v=YEJZPVuOY1Y
 
 ## What on earth is this?
 **furious** is a specialized video editor and effects engine for creating YTPMVs/otomads and other music-focused content. It's basically a video editor, but the entire project is based on a BPM similar to a DAW. Doing this allows for easily syncing clips up to supporting audio and music. You no longer
