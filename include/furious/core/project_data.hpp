@@ -2,6 +2,7 @@
 
 #include "furious/core/media_source.hpp"
 #include "furious/core/pattern.hpp"
+#include "furious/core/pitch_track.hpp"
 #include "furious/core/tempo.hpp"
 #include "furious/core/timeline_clip.hpp"
 #include "furious/core/track.hpp"
@@ -34,6 +35,14 @@ struct ProjectData {
     std::vector<Track> tracks;
     std::vector<TimelineClip> clips;
     std::vector<Pattern> patterns;
+    std::vector<PitchTrack> pitch_tracks;
+
+    bool pitch_preview_enabled = false;
+    float pitch_preview_duration = 0.5f;
+    bool pitch_editor_open = false;
+    float pitch_bgm_volume = 1.0f;
+    float pitch_clip_volume = 1.0f;
+    std::string pitch_overlay_pattern_id;
 
     [[nodiscard]] bool save_to_file(const std::string& filepath) const;
     [[nodiscard]] static bool load_from_file(const std::string& filepath, ProjectData& out_data);

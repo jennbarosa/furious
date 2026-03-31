@@ -126,6 +126,7 @@ pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
 pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
 pkg_check_modules(SWSCALE REQUIRED IMPORTED_TARGET libswscale)
 pkg_check_modules(SWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
+pkg_check_modules(RUBBERBAND REQUIRED IMPORTED_TARGET rubberband)
 
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -207,6 +208,11 @@ add_library(furious_lib STATIC
     src/video/video_engine.cpp
     src/scripting/script_engine.cpp
     src/scripting/lua_bindings.cpp
+    src/core/pitch_track.cpp
+    src/core/pitch_library.cpp
+    src/audio/pitch_estimator.cpp
+    src/audio/pitch_shifter.cpp
+    src/ui/pitch_editor_window.cpp
 )
 
 target_include_directories(furious_lib PUBLIC
@@ -226,6 +232,7 @@ target_link_libraries(furious_lib PUBLIC
     PkgConfig::AVUTIL
     PkgConfig::SWSCALE
     PkgConfig::SWRESAMPLE
+    PkgConfig::RUBBERBAND
 )
 
 add_executable(furious src/main.cpp)
@@ -305,6 +312,11 @@ if(BUILD_INTEGRATION_TESTS)
         src/video/video_engine.cpp
         src/scripting/script_engine.cpp
         src/scripting/lua_bindings.cpp
+        src/core/pitch_track.cpp
+        src/core/pitch_library.cpp
+        src/audio/pitch_estimator.cpp
+        src/audio/pitch_shifter.cpp
+        src/ui/pitch_editor_window.cpp
     )
 
     target_include_directories(furious_lib_testable PUBLIC
@@ -324,6 +336,7 @@ if(BUILD_INTEGRATION_TESTS)
         PkgConfig::AVUTIL
         PkgConfig::SWSCALE
         PkgConfig::SWRESAMPLE
+        PkgConfig::RUBBERBAND
     )
 
     add_executable(furious_integration_tests

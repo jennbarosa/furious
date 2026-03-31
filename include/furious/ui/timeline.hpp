@@ -2,6 +2,7 @@
 
 #include "furious/core/project.hpp"
 #include "furious/core/timeline_data.hpp"
+#include "furious/core/pattern_library.hpp"
 #include "furious/video/source_library.hpp"
 #include <optional>
 #include <string>
@@ -18,6 +19,7 @@ public:
 
     void set_timeline_data(TimelineData* data) { timeline_data_ = data; }
     void set_source_library(SourceLibrary* library) { source_library_ = library; }
+    void set_pattern_library(PatternLibrary* library) { pattern_library_ = library; }
 
     [[nodiscard]] const std::string& selected_clip_id() const { return selected_clip_id_; }
     void set_selected_clip_id(const std::string& id) { selected_clip_id_ = id; }
@@ -65,6 +67,7 @@ private:
     Project& project_;
     TimelineData* timeline_data_ = nullptr;
     SourceLibrary* source_library_ = nullptr;
+    PatternLibrary* pattern_library_ = nullptr;
 
     double playhead_beats_ = 0.0;
     float zoom_ = 1.0f;
@@ -97,11 +100,12 @@ private:
 
     bool show_remove_track_popup_ = false;
     size_t pending_remove_track_index_ = 0;
+    bool track_header_button_clicked_ = false;
 
     TimelineClip drag_initial_clip_state_;
     std::optional<std::pair<TimelineClip, TimelineClip>> pending_clip_modification_;
 
-    static constexpr float TRACK_HEIGHT = 32.0f;
+    static constexpr float TRACK_HEIGHT = 40.0f;
     static constexpr float TRACK_SPACING = 2.0f;
     static constexpr float TRACK_HEADER_WIDTH = 80.0f;
 
@@ -114,6 +118,7 @@ private:
     void render_time_info();
     void handle_input(ImVec2 canvas_pos, float canvas_width);
     void handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, float canvas_height);
+    [[nodiscard]] bool clip_has_restart_trigger(const TimelineClip& clip) const;
 };
 
 } // namespace furious

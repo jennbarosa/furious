@@ -21,6 +21,7 @@ public:
 
     void register_source(const MediaSource& source);
     void unregister_source(const std::string& source_id);
+    void clear_sources();
 
     void begin_frame();
 

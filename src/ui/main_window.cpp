@@ -2,6 +2,7 @@
 #include "furious/core/project_data.hpp"
 #include "furious/core/clip_commands.hpp"
 #include "furious/core/pattern_commands.hpp"
+#include "furious/audio/pitch_estimator.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <GLFW/glfw3.h>
@@ -27,6 +28,7 @@ MainWindow::MainWindow()
 
     timeline_.set_timeline_data(&timeline_data_);
     timeline_.set_source_library(&source_library_);
+    timeline_.set_pattern_library(&pattern_library_);
 
     viewport_.set_video_engine(&video_engine_);
     viewport_.set_timeline_data(&timeline_data_);
@@ -36,6 +38,16 @@ MainWindow::MainWindow()
     patterns_window_.set_tempo(&project_.tempo());
     patterns_window_.set_command_callback([this](std::unique_ptr<Command> cmd) {
         execute_command(std::move(cmd));
+    });
+
+    pitch_editor_.set_pitch_library(&pitch_library_);
+    pitch_editor_.set_pattern_library(&pattern_library_);
+    pitch_editor_.set_tempo(&project_.tempo());
+    pitch_editor_.set_command_callback([this](std::unique_ptr<Command> cmd) {
+        execute_command(std::move(cmd));
+    });
+    pitch_editor_.set_preview_callback([this](int subdivision, int midi_note, float duration, float bgm_vol, float clip_vol) {
+        preview_pitch_at_subdivision(subdivision, midi_note, duration, bgm_vol, clip_vol);
     });
 
     pattern_evaluator_.set_pattern_library(&pattern_library_);
@@ -90,6 +102,7 @@ void MainWindow::render() {
     }
 
     bool is_seeking = timeline_.is_seeking();
+    bool is_previewing = (preview_end_time_ > 0.0 && audio_engine_.playhead_seconds() < preview_end_time_);
 
     if (is_seeking) {
         double current_seconds = project_.tempo().beats_to_time(timeline_.playhead_position());
@@ -104,7 +117,14 @@ void MainWindow::render() {
         double audio_seconds = audio_engine_.playhead_seconds();
         double audio_beats = project_.tempo().time_to_beats(audio_seconds);
         timeline_.set_playhead_position(audio_beats);
+    } else if (is_previewing) {
+        double audio_seconds = audio_engine_.playhead_seconds();
+        double audio_beats = project_.tempo().time_to_beats(audio_seconds);
+        timeline_.set_playhead_position(audio_beats);
     } else {
+        if (preview_end_time_ > 0.0) {
+            preview_end_time_ = 0.0;
+        }
         if (audio_engine_.is_playing()) {
             audio_engine_.pause();
         }
@@ -121,8 +141,17 @@ void MainWindow::render() {
 
     video_engine_.set_interactive_mode(timeline_.is_dragging_clip());
     video_engine_.begin_frame();
-    sync_video_to_playhead();
-    sync_audio_to_playhead();
+
+    double current_beats = timeline_.playhead_position();
+    bool playhead_moved = std::abs(current_beats - last_synced_beats_) > 0.0001;
+    bool needs_video_sync = is_playing || is_seeking || is_previewing || playhead_moved || !video_synced_once_;
+
+    if (needs_video_sync) {
+        sync_video_to_playhead();
+        sync_audio_to_playhead();
+        last_synced_beats_ = current_beats;
+        video_synced_once_ = true;
+    }
     video_engine_.update();
 
     auto t3 = std::chrono::high_resolution_clock::now();
@@ -134,6 +163,9 @@ void MainWindow::render() {
     render_sources_panel();
     render_effects_panel();
     patterns_window_.render();
+    pitch_editor_.set_audio_clip(audio_engine_.clip());
+    pitch_editor_.set_playhead_beat(timeline_.playhead_position());
+    pitch_editor_.render();
 
     auto t4 = std::chrono::high_resolution_clock::now();
 
@@ -148,7 +180,7 @@ void MainWindow::render() {
                     total_ms, dockspace_ms, logic_ms, video_ms, ui_ms);
     }
 
-    if (timeline_.consume_play_toggle_request() || viewport_.consume_play_toggle_request()) {
+    if (timeline_.consume_play_toggle_request() || viewport_.consume_play_toggle_request() || pitch_editor_.consume_play_toggle_request()) {
         transport_controls_.set_playing(!transport_controls_.is_playing());
     }
 
@@ -209,8 +241,24 @@ void MainWindow::sync_video_to_playhead() {
 
     viewport_.clear_transform_overrides();
 
+    // Check if any track is soloed
+    bool any_soloed = false;
+    for (size_t i = 0; i < timeline_data_.track_count(); ++i) {
+        if (timeline_data_.track(i).soloed) {
+            any_soloed = true;
+            break;
+        }
+    }
+
     std::vector<const TimelineClip*> const_clips;
     for (TimelineClip* clip : active_clips) {
+        // Apply mute/solo logic
+        const Track& track = timeline_data_.track(clip->track_index);
+        if (any_soloed) {
+            if (!track.soloed) continue;  // Skip non-soloed tracks when solo is active
+        } else {
+            if (track.muted) continue;    // Skip muted tracks
+        }
         double clip_local_beats = current_beats - clip->start_beat;
 
         PatternEvaluationResult pattern_result = pattern_evaluator_.evaluate(*clip, clip_local_beats);
@@ -248,7 +296,8 @@ void MainWindow::sync_video_to_playhead() {
                                                    result.loop_duration_seconds,
                                                    result.position_in_loop_seconds);
             } else if (pattern_result.use_looped_playback) {
-                double loop_start = clip->source_start_seconds;
+                double restart_offset_seconds = project_.tempo().beats_to_time(pattern_result.restart_offset_beats);
+                double loop_start = clip->source_start_seconds + restart_offset_seconds;
                 double loop_duration = project_.tempo().beats_to_time(pattern_result.loop_duration_beats);
                 double position_in_loop = project_.tempo().beats_to_time(pattern_result.position_in_loop_beats);
                 video_engine_.request_looped_frame(clip->id, clip->source_id,
@@ -281,7 +330,8 @@ void MainWindow::sync_video_to_playhead() {
             }
 
             if (pattern_result.use_looped_playback) {
-                double loop_start = clip->source_start_seconds;
+                double restart_offset_seconds = project_.tempo().beats_to_time(pattern_result.restart_offset_beats);
+                double loop_start = clip->source_start_seconds + restart_offset_seconds;
                 double loop_duration = project_.tempo().beats_to_time(pattern_result.loop_duration_beats);
                 double position_in_loop = project_.tempo().beats_to_time(pattern_result.position_in_loop_beats);
                 video_engine_.request_looped_frame(clip->id, clip->source_id,
@@ -312,9 +362,26 @@ void MainWindow::sync_audio_to_playhead() {
 
     auto active_clips = timeline_data_.clips_at_beat(current_beats);
 
+    // Check if any track is soloed
+    bool any_soloed = false;
+    for (size_t i = 0; i < timeline_data_.track_count(); ++i) {
+        if (timeline_data_.track(i).soloed) {
+            any_soloed = true;
+            break;
+        }
+    }
+
     std::vector<ClipAudioState> audio_clips;
 
     for (TimelineClip* clip : active_clips) {
+        // Apply mute/solo logic
+        const Track& track = timeline_data_.track(clip->track_index);
+        if (any_soloed) {
+            if (!track.soloed) continue;  // Skip non-soloed tracks when solo is active
+        } else {
+            if (track.muted) continue;    // Skip muted tracks
+        }
+
         const MediaSource* source = source_library_.find_source(clip->source_id);
         if (!source || !source->has_audio()) {
             continue;
@@ -328,19 +395,24 @@ void MainWindow::sync_audio_to_playhead() {
         audio_state.buffer = source->audio_buffer;
         audio_state.timeline_start_frame = static_cast<int64_t>(clip_start_seconds * sample_rate);
         audio_state.duration_frames = static_cast<int64_t>(clip_duration_seconds * sample_rate);
-        audio_state.volume = 1.0f;
+        audio_state.volume = clip->volume;
 
         PatternEvaluationResult pattern_result = pattern_evaluator_.evaluate(*clip, clip_local_beats);
 
         if (pattern_result.use_looped_playback) {
-            double loop_start_seconds = clip->source_start_seconds;
-            double loop_duration_seconds = project_.tempo().beats_to_time(pattern_result.loop_duration_beats);
+            if (pattern_result.freeze_at_end) {
+                audio_state.volume = 0.0f;
+            } else {
+                double restart_offset_seconds = project_.tempo().beats_to_time(pattern_result.restart_offset_beats);
+                double loop_start_seconds = clip->source_start_seconds + restart_offset_seconds;
+                double loop_duration_seconds = project_.tempo().beats_to_time(pattern_result.loop_duration_beats);
 
-            audio_state.use_looped_audio = true;
-            audio_state.loop_start_frames = static_cast<int64_t>(loop_start_seconds * source->audio_buffer->sample_rate());
-            audio_state.loop_duration_frames = static_cast<int64_t>(loop_duration_seconds * source->audio_buffer->sample_rate());
-            audio_state.loop_phase_offset_frames = 0;
-            audio_state.source_offset_frames = 0;
+                audio_state.use_looped_audio = true;
+                audio_state.loop_start_frames = static_cast<int64_t>(loop_start_seconds * source->audio_buffer->sample_rate());
+                audio_state.loop_duration_frames = static_cast<int64_t>(loop_duration_seconds * source->audio_buffer->sample_rate());
+                audio_state.loop_phase_offset_frames = 0;
+                audio_state.source_offset_frames = 0;
+            }
         } else {
             audio_state.source_offset_frames = static_cast<int64_t>(clip->source_start_seconds * source->audio_buffer->sample_rate());
         }
@@ -358,6 +430,80 @@ void MainWindow::sync_audio_to_playhead() {
                 audio_state.use_looped_audio = true;
                 audio_state.loop_start_frames = static_cast<int64_t>(result.audio_loop_start_seconds * source->audio_buffer->sample_rate());
                 audio_state.loop_duration_frames = static_cast<int64_t>(result.audio_loop_duration_seconds * source->audio_buffer->sample_rate());
+            }
+        }
+
+        if (!clip->pitch_track_id.empty()) {
+            const PitchTrack* track = pitch_library_.find_track(clip->pitch_track_id);
+            if (track && track->autotune_enabled && source->audio_buffer) {
+                constexpr double SUBDIVISIONS_PER_BEAT = 4.0;
+                int current_subdiv = static_cast<int>(clip_local_beats * SUBDIVISIONS_PER_BEAT)
+                                   % track->length_subdivisions;
+                const PitchNote* note = track->note_at(current_subdiv);
+                if (note) {
+                    audio_state.clip_id = clip->id;
+                    audio_state.autotune_enabled = true;
+                    audio_state.autotune_target_midi = note->midi_note;
+                    audio_state.autotune_amount = 1.0f;
+
+                    int64_t source_frame = audio_state.source_offset_frames;
+                    if (audio_state.use_looped_audio && audio_state.loop_duration_frames > 0) {
+                        int64_t phase = audio_state.loop_phase_offset_frames % audio_state.loop_duration_frames;
+                        if (phase < 0) phase += audio_state.loop_duration_frames;
+                        source_frame = audio_state.loop_start_frames + phase;
+                    }
+
+                    constexpr size_t ANALYSIS_WINDOW = 2048;
+                    constexpr int64_t CACHE_THRESHOLD = 512;
+                    constexpr int FRAME_RATE_LIMIT = 4;
+                    uint32_t buf_channels = source->audio_buffer->channels();
+                    uint32_t buf_sample_rate = source->audio_buffer->sample_rate();
+
+                    auto& cache = pitch_detection_cache_[clip->id];
+                    cache.frames_since_detection++;
+
+                    bool position_changed = std::abs(source_frame - cache.last_source_frame) > CACHE_THRESHOLD;
+                    bool frame_limit_passed = cache.frames_since_detection >= FRAME_RATE_LIMIT;
+                    bool need_detection = position_changed && frame_limit_passed;
+
+                    if (need_detection &&
+                        source_frame >= 0 &&
+                        source_frame + static_cast<int64_t>(ANALYSIS_WINDOW) < static_cast<int64_t>(source->audio_buffer->frame_count())) {
+
+                        std::vector<float> mono_samples(ANALYSIS_WINDOW);
+                        for (size_t j = 0; j < ANALYSIS_WINDOW; ++j) {
+                            float sample = source->audio_buffer->sample_at(static_cast<uint64_t>(source_frame) + j, 0);
+                            if (buf_channels >= 2) {
+                                sample = (sample + source->audio_buffer->sample_at(static_cast<uint64_t>(source_frame) + j, 1)) * 0.5f;
+                            }
+                            mono_samples[j] = sample;
+                        }
+
+                        PitchResult detected = PitchEstimator::estimate(
+                            mono_samples.data(), ANALYSIS_WINDOW, buf_sample_rate, PitchAlgorithm::YIN);
+
+                        cache.last_source_frame = source_frame;
+                        cache.detected_frequency = detected.frequency_hz;
+                        cache.confidence = detected.confidence;
+                        cache.frames_since_detection = 0;
+                    }
+
+                    if (cache.confidence > 0.5f && cache.detected_frequency > 50.0f) {
+                        float target_freq = note->frequency_hz();
+                        float raw_shift = 1200.0f * std::log2(target_freq / cache.detected_frequency);
+                        constexpr float MAX_SHIFT_CENTS = 3600.0f;
+                        float new_shift = std::max(-MAX_SHIFT_CENTS, std::min(MAX_SHIFT_CENTS, raw_shift));
+
+                        auto it = last_pitch_shift_cents_.find(clip->id);
+                        if (it != last_pitch_shift_cents_.end()) {
+                            float alpha = 1.0f - track->smoothing * 0.99f;
+                            audio_state.pitch_shift_cents = it->second + alpha * (new_shift - it->second);
+                        } else {
+                            audio_state.pitch_shift_cents = new_shift;
+                        }
+                        last_pitch_shift_cents_[clip->id] = audio_state.pitch_shift_cents;
+                    }
+                }
             }
         }
 
@@ -439,6 +585,10 @@ PatternLibrary& MainWindow::pattern_library() {
     return pattern_library_;
 }
 
+PitchLibrary& MainWindow::pitch_library() {
+    return pitch_library_;
+}
+
 TimelineData& MainWindow::timeline_data() {
     return timeline_data_;
 }
@@ -476,7 +626,10 @@ std::string MainWindow::import_source(const std::string& filepath) {
 }
 
 void MainWindow::render_sources_panel() {
-    ImGui::Begin("Sources");
+    if (!ImGui::Begin("Sources")) {
+        ImGui::End();
+        return;
+    }
 
     if (ImGui::Button("Import Source")) {
         nfdu8char_t* out_path = nullptr;
@@ -524,6 +677,44 @@ void MainWindow::render_sources_panel() {
 
             execute_command(std::make_unique<AddClipCommand>(timeline_data_, clip));
             video_engine_.prefetch_clip(clip.id, clip.source_id, clip.source_start_seconds);
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("S")) {
+            nfdu8char_t* out_path = nullptr;
+            nfdu8filteritem_t filters[] = {
+                {"Video", "mp4,mkv,avi,mov,webm"},
+                {"Image", "png,jpg,jpeg,bmp,gif"}
+            };
+            nfdopendialogu8args_t args = {0};
+            args.filterList = filters;
+            args.filterCount = 2;
+
+            if (NFD_OpenDialogU8_With(&out_path, &args) == NFD_OKAY) {
+                std::string source_id = source.id;
+                video_engine_.unregister_source(source_id);
+                if (source_library_.replace_source(source_id, out_path)) {
+                    if (MediaSource* new_source = source_library_.find_source(source_id)) {
+                        video_engine_.register_source(*new_source);
+                        if (new_source->type == MediaType::Video) {
+                            new_source->duration_seconds = video_engine_.get_source_duration(source_id);
+                            new_source->fps = video_engine_.get_source_fps(source_id);
+                        }
+
+                        for (const auto& clip : timeline_data_.clips()) {
+                            if (clip.source_id == source_id) {
+                                pitch_detection_cache_.erase(clip.id);
+                                last_pitch_shift_cents_.erase(clip.id);
+                                audio_engine_.reset_pitch_shifter(clip.id);
+                            }
+                        }
+                    }
+                    dirty_ = true;
+                }
+                NFD_FreePathU8(out_path);
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Swap source file (updates all clips)");
         }
         ImGui::SameLine();
         if (ImGui::SmallButton("X")) {
@@ -580,7 +771,10 @@ void MainWindow::render_sources_panel() {
 }
 
 void MainWindow::render_effects_panel() {
-    ImGui::Begin("Clip");
+    if (!ImGui::Begin("Clip")) {
+        ImGui::End();
+        return;
+    }
 
     const std::string& selected_id = timeline_.selected_clip_id();
     TimelineClip* clip = nullptr;
@@ -900,6 +1094,58 @@ void MainWindow::render_effects_panel() {
         }
     }
 
+    if (ImGui::CollapsingHeader("Audio", ImGuiTreeNodeFlags_DefaultOpen)) {
+        int vol_pct = static_cast<int>(clip->volume * 100.0f);
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::SliderInt("Volume", &vol_pct, 0, 200, "%d%%")) {
+            TimelineClip old_state = *clip;
+            clip->volume = static_cast<float>(vol_pct) / 100.0f;
+            execute_command(std::make_unique<ModifyClipCommand>(
+                timeline_data_, clip->id, old_state, *clip, "Set volume"));
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Pitch Track")) {
+        std::vector<std::string> track_names;
+        std::vector<std::string> track_ids;
+        track_names.push_back("None");
+        track_ids.push_back("");
+
+        for (const auto& track : pitch_library_.tracks()) {
+            track_names.push_back(track.name);
+            track_ids.push_back(track.id);
+        }
+
+        int current = 0;
+        for (size_t i = 0; i < track_ids.size(); ++i) {
+            if (track_ids[i] == clip->pitch_track_id) {
+                current = static_cast<int>(i);
+                break;
+            }
+        }
+
+        std::string combo_items;
+        for (const auto& name : track_names) {
+            combo_items += name + '\0';
+        }
+        combo_items += '\0';
+
+        if (ImGui::Combo("Track", &current, combo_items.c_str())) {
+            TimelineClip old_state = *clip;
+            clip->pitch_track_id = track_ids[current];
+            execute_command(std::make_unique<ModifyClipCommand>(
+                timeline_data_, clip->id, old_state, *clip, "Set pitch track"));
+        }
+
+        if (pitch_library_.tracks().empty()) {
+            ImGui::TextDisabled("No pitch tracks available.");
+            ImGui::TextDisabled("Create one in the Pitch Editor.");
+            if (ImGui::SmallButton("Open Pitch Editor")) {
+                pitch_editor_.set_open(true);
+            }
+        }
+    }
+
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -912,7 +1158,10 @@ void MainWindow::render_effects_panel() {
 }
 
 void MainWindow::render_audio_panel() {
-    ImGui::Begin("Audio");
+    if (!ImGui::Begin("Audio")) {
+        ImGui::End();
+        return;
+    }
 
     if (audio_engine_.has_clip()) {
         const AudioClip* clip = audio_engine_.clip();
@@ -956,6 +1205,12 @@ void MainWindow::render_audio_panel() {
         if (ImGui::Button("Reset Bounds")) {
             audio_engine_.reset_clip_bounds();
             dirty_ = true;
+        }
+
+        ImGui::Separator();
+
+        if (ImGui::Button("Open Pitch Editor")) {
+            pitch_editor_.set_open(true);
         }
 
         ImGui::Separator();
@@ -1016,6 +1271,13 @@ bool MainWindow::save_project(const std::string& filepath) {
     data.tracks = timeline_data_.tracks();
     data.clips = timeline_data_.clips();
     data.patterns = pattern_library_.patterns();
+    data.pitch_tracks = pitch_library_.tracks();
+    data.pitch_preview_enabled = pitch_editor_.preview_enabled();
+    data.pitch_preview_duration = pitch_editor_.preview_duration();
+    data.pitch_editor_open = pitch_editor_.is_open();
+    data.pitch_bgm_volume = pitch_editor_.bgm_volume();
+    data.pitch_clip_volume = pitch_editor_.clip_volume();
+    data.pitch_overlay_pattern_id = pitch_editor_.overlay_pattern_id();
 
     if (glfw_window_) {
         glfwGetWindowSize(glfw_window_, &data.window_width, &data.window_height);
@@ -1058,6 +1320,7 @@ bool MainWindow::load_project(const std::string& filepath) {
     }
 
     source_library_.clear();
+    video_engine_.clear_sources();
     for (const auto& source : data.sources) {
         source_library_.add_source_direct(source);
         video_engine_.register_source(source);
@@ -1075,6 +1338,17 @@ bool MainWindow::load_project(const std::string& filepath) {
     for (const auto& pattern : data.patterns) {
         pattern_library_.add_pattern(pattern);
     }
+
+    pitch_library_.clear();
+    for (const auto& track : data.pitch_tracks) {
+        pitch_library_.add_track(track);
+    }
+    pitch_editor_.set_preview_enabled(data.pitch_preview_enabled);
+    pitch_editor_.set_preview_duration(data.pitch_preview_duration);
+    pitch_editor_.set_open(data.pitch_editor_open);
+    pitch_editor_.set_bgm_volume(data.pitch_bgm_volume);
+    pitch_editor_.set_clip_volume(data.pitch_clip_volume);
+    pitch_editor_.set_overlay_pattern_id(data.pitch_overlay_pattern_id);
 
     timeline_.set_playhead_position(data.playhead_beat);
     timeline_.set_zoom(data.timeline_zoom);
@@ -1098,6 +1372,10 @@ bool MainWindow::load_project(const std::string& filepath) {
 
     start_cache_building();
 
+    pitch_detection_cache_.clear();
+    last_pitch_shift_cents_.clear();
+    audio_engine_.clear_pitch_shifters();
+
     current_project_path_ = filepath;
     transport_controls_.set_current_project_path(filepath);
     command_history_.clear();
@@ -1106,6 +1384,10 @@ bool MainWindow::load_project(const std::string& filepath) {
 }
 
 bool MainWindow::needs_continuous_rendering() const {
+    return transport_controls_.is_playing() || audio_engine_.is_playing();
+}
+
+bool MainWindow::is_playing() const {
     return transport_controls_.is_playing() || audio_engine_.is_playing();
 }
 
@@ -1218,6 +1500,7 @@ void MainWindow::render_loading_modal() {
 }
 
 void MainWindow::execute_command(std::unique_ptr<Command> cmd) {
+    viewport_.set_active_clips({});
     command_history_.execute(std::move(cmd));
     dirty_ = true;
 }
@@ -1227,6 +1510,7 @@ void MainWindow::handle_keyboard_shortcuts() {
 
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z) && !io.KeyShift) {
         if (command_history_.can_undo()) {
+            viewport_.set_active_clips({});
             command_history_.undo();
             dirty_ = true;
         }
@@ -1235,6 +1519,7 @@ void MainWindow::handle_keyboard_shortcuts() {
     if ((io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) ||
         (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))) {
         if (command_history_.can_redo()) {
+            viewport_.set_active_clips({});
             command_history_.redo();
             dirty_ = true;
         }
@@ -1259,6 +1544,24 @@ void MainWindow::handle_keyboard_shortcuts() {
                 NFD_FreePathU8(out_path);
             }
         }
+    }
+}
+
+void MainWindow::preview_pitch_at_subdivision(int subdivision, int midi_note, float duration, float bgm_vol, float clip_vol) {
+    constexpr int SUBDIVISIONS_PER_BEAT = 4;
+    double beat = static_cast<double>(subdivision) / static_cast<double>(SUBDIVISIONS_PER_BEAT);
+    double seconds = project_.tempo().beats_to_time(beat);
+
+    timeline_.set_playhead_position(beat);
+    audio_engine_.set_playhead_seconds(seconds);
+    audio_engine_.set_bgm_volume(bgm_vol);
+    audio_engine_.set_clip_volume(clip_vol);
+    sync_audio_to_playhead();
+
+    preview_end_time_ = seconds + static_cast<double>(duration);
+
+    if (!audio_engine_.is_playing()) {
+        audio_engine_.play();
     }
 }
 

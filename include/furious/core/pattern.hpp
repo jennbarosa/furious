@@ -20,6 +20,7 @@ struct PatternTrigger {
     int subdivision_index = 0;
     PatternTargetProperty target = PatternTargetProperty::ScaleX;
     float value = 1.0f;
+    int duration_subdivisions = -1;
 };
 
 struct PatternPropertySettings {
@@ -31,6 +32,7 @@ struct Pattern {
     std::string name;
     int length_subdivisions = 16;
     std::vector<PatternTrigger> triggers;
+    double restart_offset_beats = 0.0;
 
     PatternPropertySettings position_x_settings;
     PatternPropertySettings position_y_settings;

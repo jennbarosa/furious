@@ -20,6 +20,8 @@ struct PatternEvaluationResult {
     bool use_looped_playback = false;
     double loop_duration_beats = 0.0;
     double position_in_loop_beats = 0.0;
+    double restart_offset_beats = 0.0;
+    bool freeze_at_end = false;
 };
 
 class PatternEvaluator {

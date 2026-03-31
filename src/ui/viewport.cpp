@@ -21,7 +21,10 @@ Viewport::Viewport() = default;
 
 void Viewport::render() {
     ImGui::SetNextWindowClass(&GetViewportWindowClass());
-    ImGui::Begin("Viewport");
+    if (!ImGui::Begin("Viewport")) {
+        ImGui::End();
+        return;
+    }
 
     ImVec2 available = ImGui::GetContentRegionAvail();
     width_ = available.x;

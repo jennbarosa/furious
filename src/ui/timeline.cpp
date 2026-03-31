@@ -35,7 +35,10 @@ void Timeline::update(double delta_seconds, bool is_playing) {
 
 void Timeline::render() {
     ImGui::SetNextWindowClass(&GetTimelineWindowClass());
-    ImGui::Begin("Timeline");
+    if (!ImGui::Begin("Timeline")) {
+        ImGui::End();
+        return;
+    }
 
     float time_info_height = ImGui::GetTextLineHeightWithSpacing() + 4.0f;
 
@@ -134,37 +137,37 @@ void Timeline::render_grid(ImVec2 canvas_pos, float canvas_width, float canvas_h
     float pixels_per_beat = 100.0f * zoom_;
     int subdivision = static_cast<int>(project_.grid_subdivision());
 
+    float pixels_per_subdiv = pixels_per_beat / subdivision;
+    bool draw_subdivisions = pixels_per_subdiv >= 8.0f;
+    bool draw_beats = pixels_per_beat / 4.0f >= 4.0f;
+
     float start_beat = scroll_offset_ / pixels_per_beat;
     int start_line = static_cast<int>(std::floor(start_beat * subdivision));
     int end_line = static_cast<int>(std::ceil((scroll_offset_ + canvas_width) / pixels_per_beat * subdivision));
 
     for (int i = start_line; i <= end_line; ++i) {
-        float x = canvas_pos.x + (i / static_cast<float>(subdivision)) * pixels_per_beat - scroll_offset_;
-
-        if (x < canvas_pos.x || x > canvas_pos.x + canvas_width) continue;
-
         bool is_beat = (i % subdivision) == 0;
         bool is_bar = (i % (subdivision * 4)) == 0;
 
-        ImU32 color;
-        float thickness;
+        if (!is_bar && !is_beat && !draw_subdivisions) continue;
+        if (!is_bar && is_beat && !draw_beats) continue;
 
+        float x = canvas_pos.x + (i / static_cast<float>(subdivision)) * pixels_per_beat - scroll_offset_;
+        if (x < canvas_pos.x || x > canvas_pos.x + canvas_width) continue;
+
+        ImU32 color;
         if (is_bar) {
             color = IM_COL32(180, 180, 200, 255);
-            thickness = 2.5f;
         } else if (is_beat) {
             color = IM_COL32(90, 90, 100, 255);
-            thickness = 1.5f;
         } else {
             color = IM_COL32(55, 55, 60, 255);
-            thickness = 1.0f;
         }
 
-        draw_list->AddLine(
+        draw_list->AddRectFilled(
             ImVec2(x, canvas_pos.y),
-            ImVec2(x, canvas_pos.y + canvas_height),
-            color,
-            thickness
+            ImVec2(x + 1.0f, canvas_pos.y + canvas_height),
+            color
         );
     }
 }
@@ -236,7 +239,10 @@ void Timeline::handle_input(ImVec2 canvas_pos, float canvas_width) {
     float pixels_per_beat = 100.0f * zoom_;
     is_seeking_ = false;
 
-    if (!dragging_clip_ && ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+    bool skip_playhead = track_header_button_clicked_;
+    track_header_button_clicked_ = false;
+
+    if (!skip_playhead && !dragging_clip_ && ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
         ImVec2 mouse_pos = ImGui::GetMousePos();
         float relative_x = mouse_pos.x - canvas_pos.x + scroll_offset_;
         double clicked_beat = static_cast<double>(relative_x / pixels_per_beat);
@@ -244,7 +250,7 @@ void Timeline::handle_input(ImVec2 canvas_pos, float canvas_width) {
         is_seeking_ = true;
     }
 
-    if (!dragging_clip_ && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+    if (!skip_playhead && !dragging_clip_ && ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         ImVec2 mouse_pos = ImGui::GetMousePos();
         float relative_x = mouse_pos.x - canvas_pos.x + scroll_offset_;
         double clicked_beat = static_cast<double>(relative_x / pixels_per_beat);
@@ -387,12 +393,54 @@ void Timeline::render_track_headers(ImVec2 canvas_pos, float canvas_height) {
         if (text_y >= canvas_pos.y &&
             text_y + text_height <= visible_bottom &&
             (visible_bottom - visible_top) >= text_height + 4.0f) {
-            const Track& track = timeline_data_->track(i);
+            Track& track = timeline_data_->track(i);
             draw_list->AddText(
                 ImVec2(canvas_pos.x + 4.0f, text_y),
                 IM_COL32(200, 200, 200, 255),
                 track.name.c_str()
             );
+
+            // Mute/Solo buttons below track name
+            float btn_y = text_y + text_height + 2.0f;
+            if (btn_y + 14.0f <= visible_bottom) {
+                ImVec2 mouse_pos = ImGui::GetMousePos();
+                float btn_size = 14.0f;
+                float btn_spacing = 2.0f;
+
+                // Mute button
+                ImVec2 mute_pos(canvas_pos.x + 4.0f, btn_y);
+                ImVec2 mute_max(mute_pos.x + btn_size, mute_pos.y + btn_size);
+                bool mute_hovered = mouse_pos.x >= mute_pos.x && mouse_pos.x <= mute_max.x &&
+                                    mouse_pos.y >= mute_pos.y && mouse_pos.y <= mute_max.y;
+
+                ImU32 mute_color = track.muted ? IM_COL32(180, 60, 60, 255) :
+                                   (mute_hovered ? IM_COL32(80, 80, 90, 255) : IM_COL32(60, 60, 70, 255));
+                draw_list->AddRectFilled(mute_pos, mute_max, mute_color);
+                draw_list->AddText(ImVec2(mute_pos.x + 3.0f, mute_pos.y + 1.0f),
+                                   IM_COL32(200, 200, 200, 255), "M");
+
+                if (mute_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    track.muted = !track.muted;
+                    track_header_button_clicked_ = true;
+                }
+
+                // Solo button
+                ImVec2 solo_pos(mute_max.x + btn_spacing, btn_y);
+                ImVec2 solo_max(solo_pos.x + btn_size, solo_pos.y + btn_size);
+                bool solo_hovered = mouse_pos.x >= solo_pos.x && mouse_pos.x <= solo_max.x &&
+                                    mouse_pos.y >= solo_pos.y && mouse_pos.y <= solo_max.y;
+
+                ImU32 solo_color = track.soloed ? IM_COL32(60, 150, 60, 255) :
+                                   (solo_hovered ? IM_COL32(80, 80, 90, 255) : IM_COL32(60, 60, 70, 255));
+                draw_list->AddRectFilled(solo_pos, solo_max, solo_color);
+                draw_list->AddText(ImVec2(solo_pos.x + 4.0f, solo_pos.y + 1.0f),
+                                   IM_COL32(200, 200, 200, 255), "S");
+
+                if (solo_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    track.soloed = !track.soloed;
+                    track_header_button_clicked_ = true;
+                }
+            }
         }
     }
 
@@ -407,7 +455,7 @@ void Timeline::render_track_headers(ImVec2 canvas_pos, float canvas_height) {
                            mouse_pos.y >= add_btn_pos.y && mouse_pos.y <= add_btn_max.y;
 
         ImU32 add_btn_color = add_hovered ? IM_COL32(80, 80, 90, 255) : IM_COL32(60, 60, 70, 255);
-        draw_list->AddRectFilled(add_btn_pos, add_btn_max, add_btn_color, 3.0f);
+        draw_list->AddRectFilled(add_btn_pos, add_btn_max, add_btn_color);
         draw_list->AddText(ImVec2(add_btn_pos.x + 6.0f, add_btn_pos.y + 1.0f), IM_COL32(200, 200, 200, 255), "+");
 
         if (add_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -421,7 +469,7 @@ void Timeline::render_track_headers(ImVec2 canvas_pos, float canvas_height) {
                                   mouse_pos.y >= remove_btn_pos.y && mouse_pos.y <= remove_btn_max.y;
 
             ImU32 remove_btn_color = remove_hovered ? IM_COL32(100, 60, 60, 255) : IM_COL32(70, 50, 50, 255);
-            draw_list->AddRectFilled(remove_btn_pos, remove_btn_max, remove_btn_color, 3.0f);
+            draw_list->AddRectFilled(remove_btn_pos, remove_btn_max, remove_btn_color);
             draw_list->AddText(ImVec2(remove_btn_pos.x + 7.0f, remove_btn_pos.y + 1.0f), IM_COL32(200, 200, 200, 255), "-");
 
             if (remove_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -706,7 +754,9 @@ void Timeline::handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, fl
                     double new_duration = new_end_beat - drag_initial_start_beat_;
                     new_duration = std::max(MIN_CLIP_DURATION, new_duration);
 
-                    if (source_library_) {
+                    bool has_restart = clip_has_restart_trigger(*clip);
+
+                    if (!has_restart && source_library_) {
                         if (const MediaSource* source = source_library_->find_source(clip->source_id)) {
                             if (source->type == MediaType::Video && source->duration_seconds > 0.0) {
                                 double remaining_source_seconds = source->duration_seconds - clip->source_start_seconds;
@@ -743,6 +793,33 @@ void Timeline::handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, fl
         dragging_clip_id_.clear();
         drag_mode_ = DragMode::None;
     }
+}
+
+bool Timeline::clip_has_restart_trigger(const TimelineClip& clip) const {
+    for (const auto& effect : clip.effects) {
+        if (effect.enabled) {
+            return true;
+        }
+    }
+
+    if (!pattern_library_) {
+        return false;
+    }
+
+    for (const auto& ref : clip.patterns) {
+        if (!ref.enabled) continue;
+
+        const Pattern* pattern = pattern_library_->find_pattern(ref.pattern_id);
+        if (!pattern) continue;
+
+        for (const auto& trigger : pattern->triggers) {
+            const auto& settings = pattern->settings_for(trigger.target);
+            if (settings.restart_on_trigger) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 } // namespace furious

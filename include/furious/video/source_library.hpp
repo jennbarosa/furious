@@ -15,6 +15,7 @@ public:
 
     std::string add_source(const std::string& filepath);
     void add_source_direct(const MediaSource& source);
+    bool replace_source(std::string_view source_id, const std::string& new_filepath);
     void remove_source(std::string_view source_id);
 
     [[nodiscard]] MediaSource* find_source(std::string_view source_id);

@@ -51,6 +51,33 @@ void SourceLibrary::add_source_direct(const MediaSource& source) {
     sources_.push_back(std::move(new_source));
 }
 
+bool SourceLibrary::replace_source(std::string_view source_id, const std::string& new_filepath) {
+    MediaSource* source = find_source(source_id);
+    if (!source) {
+        return false;
+    }
+
+    source->filepath = new_filepath;
+    source->name = extract_filename(new_filepath);
+    source->type = detect_media_type(new_filepath);
+    source->audio_buffer = nullptr;
+
+    if (source->type == MediaType::Image) {
+        source->duration_seconds = 0.0;
+        source->fps = 0.0;
+    } else if (source->type == MediaType::Video) {
+        AudioDecoder audio_decoder;
+        if (audio_decoder.open(new_filepath).has_value() && audio_decoder.has_audio_stream()) {
+            auto result = audio_decoder.extract_all();
+            if (result.has_value()) {
+                source->audio_buffer = std::make_shared<const AudioBuffer>(std::move(*result));
+            }
+        }
+    }
+
+    return true;
+}
+
 void SourceLibrary::remove_source(std::string_view source_id) {
     sources_.erase(
         std::remove_if(sources_.begin(), sources_.end(),

@@ -30,10 +30,16 @@ private:
     std::unique_ptr<MainWindow> main_window_;
     std::string initial_project_;
 
+    double last_mouse_x_ = 0.0;
+    double last_mouse_y_ = 0.0;
+    int idle_frames_ = 0;
+    static constexpr int IDLE_FRAME_SKIP = 3;
+
     bool init_glfw();
     bool init_imgui();
     void begin_frame();
     void end_frame();
+    bool should_render_frame();
 };
 
 } // namespace furious

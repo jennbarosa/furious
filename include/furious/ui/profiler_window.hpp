@@ -37,7 +37,7 @@ public:
 private:
     bool visible_ = false;
 
-    static constexpr size_t HISTORY_SIZE = 120;
+    static constexpr size_t HISTORY_SIZE = 30;
 
     std::array<float, HISTORY_SIZE> cpu_history_{};
     std::array<float, HISTORY_SIZE> memory_history_{};
