@@ -1142,6 +1142,7 @@ void MainWindow::render_effects_panel() {
             ImGui::TextDisabled("Create one in the Pitch Editor.");
             if (ImGui::SmallButton("Open Pitch Editor")) {
                 pitch_editor_.set_open(true);
+                ImGui::SetWindowFocus("Pitch Editor");
             }
         }
     }
@@ -1211,6 +1212,7 @@ void MainWindow::render_audio_panel() {
 
         if (ImGui::Button("Open Pitch Editor")) {
             pitch_editor_.set_open(true);
+            ImGui::SetWindowFocus("Pitch Editor");
         }
 
         ImGui::Separator();
