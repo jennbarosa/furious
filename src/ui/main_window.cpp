@@ -164,7 +164,7 @@ void MainWindow::render() {
     render_effects_panel();
     patterns_window_.render();
     pitch_editor_.set_audio_clip(audio_engine_.clip());
-    pitch_editor_.set_playhead_beat(timeline_.playhead_position());
+    pitch_editor_.set_playhead_beat(compute_pitch_editor_playhead());
     pitch_editor_.render();
 
     auto t4 = std::chrono::high_resolution_clock::now();
@@ -1547,6 +1547,18 @@ void MainWindow::handle_keyboard_shortcuts() {
             }
         }
     }
+}
+
+double MainWindow::compute_pitch_editor_playhead() const {
+    double playhead = timeline_.playhead_position();
+    const std::string& sel_id = timeline_.selected_clip_id();
+    if (!sel_id.empty()) {
+        const TimelineClip* clip = timeline_data_.find_clip(sel_id);
+        if (clip && clip->pitch_track_id == pitch_editor_.selected_track_id()) {
+            return playhead - clip->start_beat;
+        }
+    }
+    return playhead;
 }
 
 void MainWindow::preview_pitch_at_subdivision(int subdivision, int midi_note, float duration, float bgm_vol, float clip_vol) {

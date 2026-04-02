@@ -120,6 +120,7 @@ private:
     void start_cache_building();
     bool cache_next_clip();
     void handle_keyboard_shortcuts();
+    double compute_pitch_editor_playhead() const;
     void preview_pitch_at_subdivision(int subdivision, int midi_note, float duration, float bgm_vol, float clip_vol);
 };
 
