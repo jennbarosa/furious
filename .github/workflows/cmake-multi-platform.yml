@@ -26,12 +26,22 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
+          ccache \
           libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
           libgl-dev libgtk-3-dev \
           libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev \
           librubberband-dev \
           libasound2-dev \
           xvfb
+
+    - name: Set up ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ccache-${{ github.ref }}-${{ github.sha }}
+        restore-keys: |
+          ccache-${{ github.ref }}-
+          ccache-refs/heads/main-
 
     - name: Set reusable strings
       id: strings
