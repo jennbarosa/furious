@@ -57,8 +57,11 @@ public:
     [[nodiscard]] double playhead_seconds() const;
 
     [[nodiscard]] bool is_playing() const { return is_playing_; }
-    [[nodiscard]] bool has_clip() const { return clip_ && clip_->is_loaded(); }
-    [[nodiscard]] const AudioClip* clip() const { return clip_.get(); }
+    [[nodiscard]] bool has_clip() const {
+        auto c = clip_.load();
+        return c && c->is_loaded();
+    }
+    [[nodiscard]] const AudioClip* clip() const { return clip_.load().get(); }
 
     void set_metronome_enabled(bool enabled) { metronome_enabled_ = enabled; }
     [[nodiscard]] bool metronome_enabled() const { return metronome_enabled_; }
@@ -96,6 +99,8 @@ public:
     void reset_pitch_shifter(const std::string& clip_id);
     void clear_pitch_shifters();
 
+    void mix_bgm(float* output, uint32_t frame_count, uint64_t current_frame);
+
     static constexpr size_t kMaxExpectedFrames = 2048;
     [[nodiscard]] float* scratch_mono() { return scratch_mono_.data(); }
     [[nodiscard]] uint32_t* scratch_indices() { return scratch_indices_.data(); }
@@ -105,7 +110,7 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 
-    std::unique_ptr<AudioClip> clip_;
+    std::atomic<std::shared_ptr<AudioClip>> clip_;
     std::atomic<bool> is_playing_{false};
     std::atomic<uint64_t> playhead_frame_{0};
     std::atomic<bool> metronome_enabled_{false};
