@@ -128,3 +128,55 @@ TEST_F(TimelineTest, FpsCanBeSet) {
     timeline.set_fps(60.0);
     EXPECT_DOUBLE_EQ(timeline.fps(), 60.0);
 }
+
+// Loop region tests
+
+TEST_F(TimelineTest, LoopRegionDefaultsToNone) {
+    EXPECT_FALSE(timeline.has_loop_region());
+    EXPECT_DOUBLE_EQ(timeline.loop_start_beat(), 0.0);
+    EXPECT_DOUBLE_EQ(timeline.loop_end_beat(), 0.0);
+}
+
+TEST_F(TimelineTest, LoopRegionCanBeSet) {
+    timeline.set_loop_region(4.0, 16.0);
+    EXPECT_TRUE(timeline.has_loop_region());
+    EXPECT_DOUBLE_EQ(timeline.loop_start_beat(), 4.0);
+    EXPECT_DOUBLE_EQ(timeline.loop_end_beat(), 16.0);
+}
+
+TEST_F(TimelineTest, LoopRegionCanBeCleared) {
+    timeline.set_loop_region(4.0, 16.0);
+    EXPECT_TRUE(timeline.has_loop_region());
+    timeline.clear_loop_region();
+    EXPECT_FALSE(timeline.has_loop_region());
+    EXPECT_DOUBLE_EQ(timeline.loop_start_beat(), 0.0);
+    EXPECT_DOUBLE_EQ(timeline.loop_end_beat(), 0.0);
+}
+
+TEST_F(TimelineTest, LoopRegionRejectsInvalidRange) {
+    timeline.set_loop_region(16.0, 4.0);
+    EXPECT_FALSE(timeline.has_loop_region());
+}
+
+TEST_F(TimelineTest, LoopRegionRejectsEqualBounds) {
+    timeline.set_loop_region(8.0, 8.0);
+    EXPECT_FALSE(timeline.has_loop_region());
+}
+
+TEST_F(TimelineTest, LoopRegionClampsNegativeStart) {
+    timeline.set_loop_region(-2.0, 8.0);
+    EXPECT_TRUE(timeline.has_loop_region());
+    EXPECT_DOUBLE_EQ(timeline.loop_start_beat(), 0.0);
+    EXPECT_DOUBLE_EQ(timeline.loop_end_beat(), 8.0);
+}
+
+TEST_F(TimelineTest, LoopEnabledDefaultsToFalse) {
+    EXPECT_FALSE(timeline.loop_enabled());
+}
+
+TEST_F(TimelineTest, LoopEnabledCanBeToggled) {
+    timeline.set_loop_enabled(true);
+    EXPECT_TRUE(timeline.loop_enabled());
+    timeline.set_loop_enabled(false);
+    EXPECT_FALSE(timeline.loop_enabled());
+}

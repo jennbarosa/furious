@@ -325,6 +325,8 @@ bool ProjectData::save_to_file(const std::string& filepath) const {
     j["transport"]["metronome_enabled"] = metronome_enabled;
     j["transport"]["follow_playhead"] = follow_playhead;
     j["transport"]["loop_enabled"] = loop_enabled;
+    j["transport"]["loop_start_beat"] = loop_start_beat;
+    j["transport"]["loop_end_beat"] = loop_end_beat;
     j["transport"]["playhead_beat"] = playhead_beat;
     j["timeline"]["zoom"] = timeline_zoom;
     j["timeline"]["zoom_y"] = timeline_zoom_y;
@@ -412,6 +414,8 @@ bool ProjectData::load_from_file(const std::string& filepath, ProjectData& out_d
         out_data.metronome_enabled = transport.value("metronome_enabled", false);
         out_data.follow_playhead = transport.value("follow_playhead", true);
         out_data.loop_enabled = transport.value("loop_enabled", false);
+        out_data.loop_start_beat = transport.value("loop_start_beat", 0.0);
+        out_data.loop_end_beat = transport.value("loop_end_beat", 0.0);
         out_data.playhead_beat = transport.value("playhead_beat", 0.0);
     }
 
