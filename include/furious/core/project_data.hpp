@@ -19,6 +19,8 @@ struct ProjectData {
     bool metronome_enabled = false;
     bool follow_playhead = true;
     bool loop_enabled = false;
+    double loop_start_beat = 0.0;
+    double loop_end_beat = 0.0;
     double playhead_beat = 0.0;
     float timeline_zoom = 1.0f;
     float timeline_zoom_y = 1.0f;

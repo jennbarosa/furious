@@ -62,12 +62,14 @@ void Timeline::render() {
     render_track_headers(canvas_pos, canvas_height);
     render_tracks(track_area_pos, canvas_width, canvas_height);
     render_clip_region(track_area_pos, canvas_width, canvas_height);
+    render_loop_region(track_area_pos, canvas_width, canvas_height);
     render_grid(track_area_pos, canvas_width, canvas_height);
     render_clips(track_area_pos, canvas_width, canvas_height);
     render_playhead(track_area_pos, canvas_width, canvas_height);
 
     ImGui::InvisibleButton("timeline_canvas", ImVec2(available.x, canvas_height));
     handle_clip_interaction(track_area_pos, canvas_width, canvas_height);
+    handle_loop_region_input(track_area_pos, canvas_width, canvas_height);
     handle_input(track_area_pos, canvas_width);
 
     render_time_info();
@@ -239,6 +241,8 @@ void Timeline::handle_input(ImVec2 canvas_pos, float canvas_width) {
     float pixels_per_beat = 100.0f * zoom_;
     is_seeking_ = false;
 
+    if (loop_edge_drag_ != LoopDragEdge::None) return;
+
     bool skip_playhead = track_header_button_clicked_;
     track_header_button_clicked_ = false;
 
@@ -321,6 +325,19 @@ bool Timeline::consume_clip_modification(TimelineClip& old_state, TimelineClip& 
     old_state = pending_clip_modification_->first;
     new_state = pending_clip_modification_->second;
     pending_clip_modification_.reset();
+    return true;
+}
+
+bool Timeline::consume_loop_region_modification(double& old_start, double& old_end, double& new_start, double& new_end) {
+    if (!pending_loop_modification_) {
+        return false;
+    }
+    auto [os, oe, ns, ne] = *pending_loop_modification_;
+    old_start = os;
+    old_end = oe;
+    new_start = ns;
+    new_end = ne;
+    pending_loop_modification_.reset();
     return true;
 }
 
@@ -792,6 +809,214 @@ void Timeline::handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, fl
         dragging_clip_ = false;
         dragging_clip_id_.clear();
         drag_mode_ = DragMode::None;
+    }
+}
+
+void Timeline::set_loop_region(double start_beat, double end_beat) {
+    if (start_beat < end_beat) {
+        loop_start_beat_ = std::max(0.0, start_beat);
+        loop_end_beat_ = end_beat;
+    }
+}
+
+void Timeline::clear_loop_region() {
+    loop_start_beat_ = 0.0;
+    loop_end_beat_ = 0.0;
+}
+
+void Timeline::render_loop_region(ImVec2 canvas_pos, float canvas_width, float canvas_height) {
+    if (!has_loop_region()) return;
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    float pixels_per_beat = 100.0f * zoom_;
+
+    float start_x = canvas_pos.x + static_cast<float>(loop_start_beat_) * pixels_per_beat - scroll_offset_;
+    float end_x = canvas_pos.x + static_cast<float>(loop_end_beat_) * pixels_per_beat - scroll_offset_;
+
+    float visible_start = std::max(start_x, canvas_pos.x);
+    float visible_end = std::min(end_x, canvas_pos.x + canvas_width);
+
+    if (visible_start >= canvas_pos.x + canvas_width || visible_end <= canvas_pos.x) {
+        return;
+    }
+
+    ImU32 fill_color = loop_enabled_
+        ? IM_COL32(100, 200, 100, 30)
+        : IM_COL32(100, 200, 100, 15);
+
+    ImU32 edge_color = loop_enabled_
+        ? IM_COL32(100, 200, 100, 200)
+        : IM_COL32(100, 200, 100, 80);
+
+    draw_list->AddRectFilled(
+        ImVec2(visible_start, canvas_pos.y),
+        ImVec2(visible_end, canvas_pos.y + canvas_height),
+        fill_color
+    );
+
+    if (start_x >= canvas_pos.x && start_x <= canvas_pos.x + canvas_width) {
+        draw_list->AddLine(
+            ImVec2(start_x, canvas_pos.y),
+            ImVec2(start_x, canvas_pos.y + canvas_height),
+            edge_color, 2.0f
+        );
+        draw_list->AddTriangleFilled(
+            ImVec2(start_x, canvas_pos.y),
+            ImVec2(start_x + 6, canvas_pos.y),
+            ImVec2(start_x, canvas_pos.y + 8),
+            edge_color
+        );
+    }
+
+    if (end_x >= canvas_pos.x && end_x <= canvas_pos.x + canvas_width) {
+        draw_list->AddLine(
+            ImVec2(end_x, canvas_pos.y),
+            ImVec2(end_x, canvas_pos.y + canvas_height),
+            edge_color, 2.0f
+        );
+        draw_list->AddTriangleFilled(
+            ImVec2(end_x, canvas_pos.y),
+            ImVec2(end_x - 6, canvas_pos.y),
+            ImVec2(end_x, canvas_pos.y + 8),
+            edge_color
+        );
+    }
+}
+
+void Timeline::handle_loop_region_input(ImVec2 canvas_pos, float canvas_width, float canvas_height) {
+    float pixels_per_beat = 100.0f * zoom_;
+    ImVec2 mouse_pos = ImGui::GetMousePos();
+
+    constexpr double MIN_LOOP_REGION = 0.1;
+
+    // --- Cursor feedback for loop region edges ---
+    if (!creating_loop_region_ && loop_edge_drag_ == LoopDragEdge::None && has_loop_region()) {
+        float start_x = canvas_pos.x + static_cast<float>(loop_start_beat_) * pixels_per_beat - scroll_offset_;
+        float end_x = canvas_pos.x + static_cast<float>(loop_end_beat_) * pixels_per_beat - scroll_offset_;
+
+        bool on_start_edge = std::abs(mouse_pos.x - start_x) <= EDGE_HIT_ZONE &&
+                             mouse_pos.y >= canvas_pos.y && mouse_pos.y <= canvas_pos.y + canvas_height;
+        bool on_end_edge = std::abs(mouse_pos.x - end_x) <= EDGE_HIT_ZONE &&
+                           mouse_pos.y >= canvas_pos.y && mouse_pos.y <= canvas_pos.y + canvas_height;
+
+        if (on_start_edge || on_end_edge) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        }
+    }
+
+    // --- Left-click drag to adjust loop region edges ---
+    if (has_loop_region() && ImGui::IsItemClicked(ImGuiMouseButton_Left) && !dragging_clip_) {
+        float start_x = canvas_pos.x + static_cast<float>(loop_start_beat_) * pixels_per_beat - scroll_offset_;
+        float end_x = canvas_pos.x + static_cast<float>(loop_end_beat_) * pixels_per_beat - scroll_offset_;
+
+        float dist_to_start = std::abs(mouse_pos.x - start_x);
+        float dist_to_end = std::abs(mouse_pos.x - end_x);
+
+        bool on_start_edge = dist_to_start <= EDGE_HIT_ZONE &&
+                             mouse_pos.y >= canvas_pos.y && mouse_pos.y <= canvas_pos.y + canvas_height;
+        bool on_end_edge = dist_to_end <= EDGE_HIT_ZONE &&
+                           mouse_pos.y >= canvas_pos.y && mouse_pos.y <= canvas_pos.y + canvas_height;
+
+        if (on_start_edge && on_end_edge) {
+            if (dist_to_end < dist_to_start) {
+                on_start_edge = false;
+            } else {
+                on_end_edge = false;
+            }
+        }
+
+        if (on_start_edge) {
+            loop_edge_drag_ = LoopDragEdge::Left;
+            loop_drag_old_start_ = loop_start_beat_;
+            loop_drag_old_end_ = loop_end_beat_;
+        } else if (on_end_edge) {
+            loop_edge_drag_ = LoopDragEdge::Right;
+            loop_drag_old_start_ = loop_start_beat_;
+            loop_drag_old_end_ = loop_end_beat_;
+        }
+    }
+
+    if (loop_edge_drag_ != LoopDragEdge::None && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        float relative_x = mouse_pos.x - canvas_pos.x + scroll_offset_;
+        double current_beat = std::max(0.0, static_cast<double>(relative_x / pixels_per_beat));
+
+        if (project_.snap_enabled()) {
+            current_beat = snap_to_grid(current_beat, project_.grid_subdivision());
+        }
+
+        if (loop_edge_drag_ == LoopDragEdge::Left) {
+            if (current_beat < loop_end_beat_ - MIN_LOOP_REGION) {
+                loop_start_beat_ = current_beat;
+            }
+        } else {
+            if (current_beat > loop_start_beat_ + MIN_LOOP_REGION) {
+                loop_end_beat_ = current_beat;
+            }
+        }
+
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+
+    if (loop_edge_drag_ != LoopDragEdge::None && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        if (loop_start_beat_ != loop_drag_old_start_ || loop_end_beat_ != loop_drag_old_end_) {
+            pending_loop_modification_ = std::make_tuple(
+                loop_drag_old_start_, loop_drag_old_end_,
+                loop_start_beat_, loop_end_beat_);
+        }
+        loop_edge_drag_ = LoopDragEdge::None;
+    }
+
+    // --- Right-click drag to create loop region ---
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        float relative_x = mouse_pos.x - canvas_pos.x + scroll_offset_;
+        double clicked_beat = std::max(0.0, static_cast<double>(relative_x / pixels_per_beat));
+
+        if (project_.snap_enabled()) {
+            clicked_beat = snap_to_grid(clicked_beat, project_.grid_subdivision());
+        }
+
+        loop_drag_old_start_ = loop_start_beat_;
+        loop_drag_old_end_ = loop_end_beat_;
+        creating_loop_region_ = true;
+        loop_create_anchor_beat_ = clicked_beat;
+        loop_start_beat_ = clicked_beat;
+        loop_end_beat_ = clicked_beat;
+    }
+
+    if (creating_loop_region_ && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
+        float relative_x = mouse_pos.x - canvas_pos.x + scroll_offset_;
+        double current_beat = std::max(0.0, static_cast<double>(relative_x / pixels_per_beat));
+
+        if (project_.snap_enabled()) {
+            current_beat = snap_to_grid(current_beat, project_.grid_subdivision());
+        }
+
+        if (current_beat >= loop_create_anchor_beat_) {
+            loop_start_beat_ = loop_create_anchor_beat_;
+            loop_end_beat_ = current_beat;
+        } else {
+            loop_start_beat_ = current_beat;
+            loop_end_beat_ = loop_create_anchor_beat_;
+        }
+    }
+
+    if (creating_loop_region_ && ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+        creating_loop_region_ = false;
+
+        if (loop_end_beat_ - loop_start_beat_ < MIN_LOOP_REGION) {
+            // Right-click without meaningful drag — clear the region
+            loop_start_beat_ = 0.0;
+            loop_end_beat_ = 0.0;
+            if (loop_drag_old_start_ < loop_drag_old_end_) {
+                // There was a region before, emit undo command
+                pending_loop_modification_ = std::make_tuple(
+                    loop_drag_old_start_, loop_drag_old_end_, 0.0, 0.0);
+            }
+        } else if (loop_start_beat_ != loop_drag_old_start_ || loop_end_beat_ != loop_drag_old_end_) {
+            pending_loop_modification_ = std::make_tuple(
+                loop_drag_old_start_, loop_drag_old_end_,
+                loop_start_beat_, loop_end_beat_);
+        }
     }
 }
 

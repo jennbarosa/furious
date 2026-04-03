@@ -322,6 +322,34 @@ TEST_F(ProjectDataTest, ClipPatternReferenceRoundTrip) {
     EXPECT_EQ(loaded.clips[0].patterns[1].offset_subdivisions, 0);
 }
 
+TEST_F(ProjectDataTest, LoopRegionRoundTrip) {
+    ProjectData original;
+    original.loop_enabled = true;
+    original.loop_start_beat = 4.0;
+    original.loop_end_beat = 20.0;
+
+    ASSERT_TRUE(original.save_to_file(test_file_.string()));
+
+    ProjectData loaded;
+    ASSERT_TRUE(ProjectData::load_from_file(test_file_.string(), loaded));
+
+    EXPECT_TRUE(loaded.loop_enabled);
+    EXPECT_DOUBLE_EQ(loaded.loop_start_beat, 4.0);
+    EXPECT_DOUBLE_EQ(loaded.loop_end_beat, 20.0);
+}
+
+TEST_F(ProjectDataTest, LoopRegionDefaultsOnOldProject) {
+    std::ofstream file(test_file_);
+    file << R"({"version": 1, "transport": {"loop_enabled": false}})";
+    file.close();
+
+    ProjectData data;
+    ASSERT_TRUE(ProjectData::load_from_file(test_file_.string(), data));
+
+    EXPECT_DOUBLE_EQ(data.loop_start_beat, 0.0);
+    EXPECT_DOUBLE_EQ(data.loop_end_beat, 0.0);
+}
+
 TEST_F(ProjectDataTest, PatternWorkflowSimulation) {
     PatternLibrary library;
     CommandHistory history;

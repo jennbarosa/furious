@@ -12,6 +12,44 @@
 
 namespace furious {
 
+namespace {
+
+class SetLoopRegionCommand : public Command {
+public:
+    SetLoopRegionCommand(Timeline& timeline, double old_start, double old_end,
+                         double new_start, double new_end)
+        : timeline_(timeline)
+        , old_start_(old_start), old_end_(old_end)
+        , new_start_(new_start), new_end_(new_end) {}
+
+    void execute() override {
+        if (new_start_ < new_end_) {
+            timeline_.set_loop_region(new_start_, new_end_);
+        } else {
+            timeline_.clear_loop_region();
+        }
+    }
+
+    void undo() override {
+        if (old_start_ < old_end_) {
+            timeline_.set_loop_region(old_start_, old_end_);
+        } else {
+            timeline_.clear_loop_region();
+        }
+    }
+
+    [[nodiscard]] std::string description() const override {
+        return "Set loop region";
+    }
+
+private:
+    Timeline& timeline_;
+    double old_start_, old_end_;
+    double new_start_, new_end_;
+};
+
+} // namespace
+
 MainWindow::MainWindow()
     : project_("FURIOUS Project")
     , timeline_(project_)
@@ -90,6 +128,7 @@ void MainWindow::render() {
     audio_engine_.set_bpm(project_.tempo().bpm());
     timeline_.set_follow_playhead(transport_controls_.follow_playhead());
     timeline_.set_fps(project_.fps());
+    timeline_.set_loop_enabled(transport_controls_.loop_enabled());
 
     video_engine_.set_playing(is_playing);
 
@@ -116,6 +155,15 @@ void MainWindow::render() {
         }
         double audio_seconds = audio_engine_.playhead_seconds();
         double audio_beats = project_.tempo().time_to_beats(audio_seconds);
+
+        bool loop_active = transport_controls_.loop_enabled() && timeline_.has_loop_region();
+        if (loop_active && audio_beats >= timeline_.loop_end_beat()
+            && last_playhead_beats_ < timeline_.loop_end_beat()) {
+            double loop_start_seconds = project_.tempo().beats_to_time(timeline_.loop_start_beat());
+            audio_engine_.set_playhead_seconds(loop_start_seconds);
+            audio_beats = timeline_.loop_start_beat();
+        }
+
         timeline_.set_playhead_position(audio_beats);
     } else if (is_previewing) {
         double audio_seconds = audio_engine_.playhead_seconds();
@@ -203,6 +251,12 @@ void MainWindow::render() {
     if (viewport_.consume_clip_modification(old_clip_state, new_clip_state)) {
         execute_command(std::make_unique<ModifyClipCommand>(
             timeline_data_, old_clip_state.id, old_clip_state, new_clip_state, "Move clip in viewport"));
+    }
+
+    double loop_old_start, loop_old_end, loop_new_start, loop_new_end;
+    if (timeline_.consume_loop_region_modification(loop_old_start, loop_old_end, loop_new_start, loop_new_end)) {
+        execute_command(std::make_unique<SetLoopRegionCommand>(
+            timeline_, loop_old_start, loop_old_end, loop_new_start, loop_new_end));
     }
 
     is_playing = transport_controls_.is_playing();
@@ -1257,6 +1311,8 @@ bool MainWindow::save_project(const std::string& filepath) {
     data.metronome_enabled = transport_controls_.metronome_enabled();
     data.follow_playhead = transport_controls_.follow_playhead();
     data.loop_enabled = transport_controls_.loop_enabled();
+    data.loop_start_beat = timeline_.loop_start_beat();
+    data.loop_end_beat = timeline_.loop_end_beat();
     data.playhead_beat = timeline_.playhead_position();
     data.timeline_zoom = timeline_.zoom();
     data.timeline_zoom_y = timeline_.zoom_y();
@@ -1311,6 +1367,7 @@ bool MainWindow::load_project(const std::string& filepath) {
     transport_controls_.set_metronome_enabled(data.metronome_enabled);
     transport_controls_.set_follow_playhead(data.follow_playhead);
     transport_controls_.set_loop_enabled(data.loop_enabled);
+    timeline_.set_loop_region(data.loop_start_beat, data.loop_end_beat);
 
     if (!data.audio_filepath.empty()) {
         if (audio_engine_.load_clip(data.audio_filepath)) {
@@ -1524,6 +1581,23 @@ void MainWindow::handle_keyboard_shortcuts() {
             viewport_.set_active_clips({});
             command_history_.redo();
             dirty_ = true;
+        }
+    }
+
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_L)) {
+        const auto& clips = timeline_data_.clips();
+        if (!clips.empty()) {
+            double min_start = clips[0].start_beat;
+            double max_end = clips[0].end_beat();
+            for (const auto& clip : clips) {
+                min_start = std::min(min_start, clip.start_beat);
+                max_end = std::max(max_end, clip.end_beat());
+            }
+            double old_start = timeline_.loop_start_beat();
+            double old_end = timeline_.loop_end_beat();
+            execute_command(std::make_unique<SetLoopRegionCommand>(
+                timeline_, old_start, old_end, min_start, max_end));
+            transport_controls_.set_loop_enabled(true);
         }
     }
 

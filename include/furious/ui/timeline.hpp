@@ -6,6 +6,7 @@
 #include "furious/video/source_library.hpp"
 #include <optional>
 #include <string>
+#include <tuple>
 
 struct ImVec2;
 
@@ -51,12 +52,21 @@ public:
     [[nodiscard]] bool consume_delete_request(std::string& out_clip_id);
     [[nodiscard]] bool consume_data_modified();
     [[nodiscard]] bool consume_clip_modification(TimelineClip& old_state, TimelineClip& new_state);
+    [[nodiscard]] bool consume_loop_region_modification(double& old_start, double& old_end, double& new_start, double& new_end);
 
     void set_follow_playhead(bool follow) { follow_playhead_ = follow; }
     [[nodiscard]] bool follow_playhead() const { return follow_playhead_; }
 
     void set_clip_duration_beats(double beats) { clip_duration_beats_ = beats; }
     [[nodiscard]] double clip_duration_beats() const { return clip_duration_beats_; }
+
+    void set_loop_region(double start_beat, double end_beat);
+    [[nodiscard]] double loop_start_beat() const { return loop_start_beat_; }
+    [[nodiscard]] double loop_end_beat() const { return loop_end_beat_; }
+    [[nodiscard]] bool has_loop_region() const { return loop_end_beat_ > loop_start_beat_; }
+    void clear_loop_region();
+    void set_loop_enabled(bool enabled) { loop_enabled_ = enabled; }
+    [[nodiscard]] bool loop_enabled() const { return loop_enabled_; }
 
     void set_fps(double fps) { fps_ = fps; }
     [[nodiscard]] double fps() const { return fps_; }
@@ -84,6 +94,18 @@ private:
     bool follow_playhead_ = true;
     double clip_duration_beats_ = 0.0;
     double fps_ = 30.0;
+
+    // Loop region
+    double loop_start_beat_ = 0.0;
+    double loop_end_beat_ = 0.0;
+    bool loop_enabled_ = false;
+    bool creating_loop_region_ = false;
+    double loop_create_anchor_beat_ = 0.0;
+    enum class LoopDragEdge { None, Left, Right };
+    LoopDragEdge loop_edge_drag_ = LoopDragEdge::None;
+    double loop_drag_old_start_ = 0.0;
+    double loop_drag_old_end_ = 0.0;
+    std::optional<std::tuple<double, double, double, double>> pending_loop_modification_;
 
     std::string selected_clip_id_;
     std::string dragging_clip_id_;
@@ -114,10 +136,12 @@ private:
     void render_clips(ImVec2 canvas_pos, float canvas_width, float canvas_height);
     void render_grid(ImVec2 canvas_pos, float canvas_width, float canvas_height);
     void render_clip_region(ImVec2 canvas_pos, float canvas_width, float canvas_height);
+    void render_loop_region(ImVec2 canvas_pos, float canvas_width, float canvas_height);
     void render_playhead(ImVec2 canvas_pos, float canvas_width, float canvas_height);
     void render_time_info();
     void handle_input(ImVec2 canvas_pos, float canvas_width);
     void handle_clip_interaction(ImVec2 canvas_pos, float canvas_width, float canvas_height);
+    void handle_loop_region_input(ImVec2 canvas_pos, float canvas_width, float canvas_height);
     [[nodiscard]] bool clip_has_restart_trigger(const TimelineClip& clip) const;
 };
 
