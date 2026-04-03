@@ -4,11 +4,14 @@
 #include "furious/audio/audio_buffer.hpp"
 #include <memory>
 #include <atomic>
-#include <mutex>
 #include <vector>
 #include <string>
+#include <cassert>
+#include <cstdint>
 
 namespace furious {
+
+class PitchShifter;
 
 struct ClipAudioState {
     std::shared_ptr<const AudioBuffer> buffer;
@@ -24,10 +27,12 @@ struct ClipAudioState {
 
     float pitch_shift_cents = 0.0f;
 
-    std::string clip_id;               
-    bool autotune_enabled = false;     
-    int autotune_target_midi = 60;     
-    float autotune_amount = 1.0f;     
+    std::string clip_id;
+    bool autotune_enabled = false;
+    int autotune_target_midi = 60;
+    float autotune_amount = 1.0f;
+
+    PitchShifter* pitch_shifter = nullptr;
 };
 
 class AudioEngine {
@@ -85,11 +90,16 @@ public:
 
     void set_active_clips(std::vector<ClipAudioState> clips);
     void swap_active_clips_if_pending();
-    [[nodiscard]] const std::vector<ClipAudioState>& active_clips() const { return active_clips_front_; }
+    [[nodiscard]] const std::vector<ClipAudioState>& active_clips() const { return clip_buffers_[read_index_]; }
 
     void* get_pitch_shifter_for_clip(const std::string& clip_id);
     void reset_pitch_shifter(const std::string& clip_id);
     void clear_pitch_shifters();
+
+    static constexpr size_t kMaxExpectedFrames = 2048;
+    [[nodiscard]] float* scratch_mono() { return scratch_mono_.data(); }
+    [[nodiscard]] uint32_t* scratch_indices() { return scratch_indices_.data(); }
+    [[nodiscard]] float* scratch_processed() { return scratch_processed_.data(); }
 
 private:
     struct Impl;
@@ -109,10 +119,20 @@ private:
     std::atomic<float> bgm_volume_{1.0f};
     std::atomic<float> clip_volume_{1.0f};
 
-    std::vector<ClipAudioState> active_clips_front_;
-    std::vector<ClipAudioState> active_clips_back_;
-    std::atomic<bool> clips_swap_pending_{false};
-    mutable std::mutex clips_mutex_;
+    // Lock-free triple-buffer for active clips.
+    // UI thread writes to clip_buffers_[write_index_], then publishes via
+    // latest_index_.exchange(write_index_). Audio thread picks up the latest
+    // buffer via read_index_ = latest_index_.exchange(read_index_).
+    static constexpr int kNumClipBuffers = 3;
+    std::vector<ClipAudioState> clip_buffers_[kNumClipBuffers];
+    int read_index_ = 0;
+    int write_index_ = 1;
+    std::atomic<int> latest_index_{2};
+
+    // Pre-allocated scratch buffers for the audio callback.
+    std::vector<float> scratch_mono_;
+    std::vector<uint32_t> scratch_indices_;
+    std::vector<float> scratch_processed_;
 
     void generate_click_sounds();
 };
