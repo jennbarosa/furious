@@ -5,7 +5,7 @@
 
 namespace furious {
 
-namespace {
+namespace pitch_estimator_detail {
 
 constexpr float A4_FREQUENCY = 440.0f;
 constexpr int A4_MIDI = 69;
@@ -13,7 +13,7 @@ constexpr int A4_MIDI = 69;
 constexpr float MIN_FREQUENCY = 50.0f;
 constexpr float MAX_FREQUENCY = 2000.0f;
 
-} // anonymous namespace
+} // namespace pitch_estimator_detail
 
 PitchResult PitchEstimator::estimate(
     const float* samples,
@@ -38,7 +38,7 @@ int PitchEstimator::frequency_to_midi(float freq) {
     if (freq <= 0.0f) {
         return 0;
     }
-    float midi = 69.0f + 12.0f * std::log2(freq / A4_FREQUENCY);
+    float midi = 69.0f + 12.0f * std::log2(freq / pitch_estimator_detail::A4_FREQUENCY);
     return static_cast<int>(std::round(midi));
 }
 
@@ -47,8 +47,8 @@ PitchResult PitchEstimator::autocorrelation(
     size_t num_samples,
     uint32_t sample_rate
 ) {
-    const size_t min_period = static_cast<size_t>(sample_rate / MAX_FREQUENCY);
-    const size_t max_period = static_cast<size_t>(sample_rate / MIN_FREQUENCY);
+    const size_t min_period = static_cast<size_t>(sample_rate / pitch_estimator_detail::MAX_FREQUENCY);
+    const size_t max_period = static_cast<size_t>(sample_rate / pitch_estimator_detail::MIN_FREQUENCY);
 
     if (max_period >= num_samples / 2) {
         return {};
@@ -96,9 +96,9 @@ PitchResult PitchEstimator::yin(
     size_t num_samples,
     uint32_t sample_rate
 ) {
-    const size_t min_period = static_cast<size_t>(sample_rate / MAX_FREQUENCY);
+    const size_t min_period = static_cast<size_t>(sample_rate / pitch_estimator_detail::MAX_FREQUENCY);
     const size_t max_period = std::min(
-        static_cast<size_t>(sample_rate / MIN_FREQUENCY),
+        static_cast<size_t>(sample_rate / pitch_estimator_detail::MIN_FREQUENCY),
         num_samples / 2
     );
 

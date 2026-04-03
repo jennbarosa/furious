@@ -5,7 +5,7 @@
 
 namespace furious {
 
-namespace {
+namespace pitch_track_detail {
 
 constexpr std::array<const char*, 12> NOTE_NAMES = {
     "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
@@ -14,7 +14,7 @@ constexpr std::array<const char*, 12> NOTE_NAMES = {
 constexpr float A4_FREQUENCY = 440.0f;
 constexpr int A4_MIDI = 69;
 
-}
+} // namespace pitch_track_detail
 
 float PitchNote::frequency_hz() const {
     return midi_to_frequency(midi_note, fine_tune_cents);
@@ -94,12 +94,12 @@ std::string midi_to_note_name(int midi) {
     int note_index = midi % 12;
     int octave = (midi / 12) - 1;
 
-    return std::string(NOTE_NAMES[note_index]) + std::to_string(octave);
+    return std::string(pitch_track_detail::NOTE_NAMES[note_index]) + std::to_string(octave);
 }
 
 float midi_to_frequency(int midi, float fine_cents) {
-    float semitones = static_cast<float>(midi - A4_MIDI) + fine_cents / 100.0f;
-    return A4_FREQUENCY * std::pow(2.0f, semitones / 12.0f);
+    float semitones = static_cast<float>(midi - pitch_track_detail::A4_MIDI) + fine_cents / 100.0f;
+    return pitch_track_detail::A4_FREQUENCY * std::pow(2.0f, semitones / 12.0f);
 }
 
 float cents_between_frequencies(float freq1, float freq2) {

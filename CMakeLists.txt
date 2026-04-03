@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+endif()
+
 option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
 if(ENABLE_ASAN)
     add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
@@ -214,6 +220,8 @@ add_library(furious_lib STATIC
     src/audio/pitch_shifter.cpp
     src/ui/pitch_editor_window.cpp
 )
+
+set_target_properties(furious_lib PROPERTIES UNITY_BUILD ON)
 
 target_include_directories(furious_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/include
