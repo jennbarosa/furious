@@ -32,6 +32,10 @@ want to let it do **anything** in the application.
 ### Development Warning
 furious is in **very early development.** There are a lot of issues that I'm aware of, and a ton more that I'm not aware of. A lot of things may need to be reworked or changed completely. The current state of FURIOUS is purely a proof of concept and not intended to be a final product.
 
+## Contributions
+Know a way to improve furious? I'd love for you to contribute! Feel free to open an issue or a PR- I <u>will</u> review and test it!
+
+
 ## Building
 ```bash
 mkdir build
@@ -39,6 +43,7 @@ cd build
 cmake ..
 make
 ```
+
 
 ## Roadmap
 Here are some things I'm planning to add, or are still in the cooker:
