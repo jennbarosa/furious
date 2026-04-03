@@ -11,7 +11,19 @@
 #include <fstream>
 #include <unordered_map>
 
+extern "C" {
+#include <lua.h>
+#include <lauxlib.h>
+}
+
 namespace furious {
+
+static constexpr int kMaxInstructions = 1000000;
+
+static void instruction_limit_hook(lua_State* L, lua_Debug* /*ar*/) {
+    lua_sethook(L, nullptr, 0, 0);
+    luaL_error(L, "script exceeded instruction limit");
+}
 
 struct ScriptEngine::Impl {
     sol::state lua;
@@ -102,6 +114,15 @@ bool ScriptEngine::initialize() {
             sol::lib::string,
             sol::lib::table
         );
+
+        impl_->lua["dofile"] = sol::nil;
+        impl_->lua["loadfile"] = sol::nil;
+        impl_->lua["load"] = sol::nil;
+        impl_->lua["collectgarbage"] = sol::nil;
+        impl_->lua["rawget"] = sol::nil;
+        impl_->lua["rawset"] = sol::nil;
+        impl_->lua["rawequal"] = sol::nil;
+        impl_->lua["rawlen"] = sol::nil;
 
         register_lua_bindings(impl_->lua.lua_state());
 
@@ -232,7 +253,13 @@ EffectResult ScriptEngine::evaluate_effect(
             lua_params[key] = value;
         }
 
+        lua_State* L = impl_->lua.lua_state();
+        lua_sethook(L, instruction_limit_hook, LUA_MASKCOUNT, kMaxInstructions);
+
         sol::protected_function_result eval_result = evaluate(lua_context, lua_params);
+
+        lua_sethook(L, nullptr, 0, 0);
+
         if (!eval_result.valid()) {
             sol::error err = eval_result;
             impl_->last_error = err.what();
