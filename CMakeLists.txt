@@ -289,8 +289,6 @@ if(BUILD_TESTS)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Running tests..."
     )
-
-    add_dependencies(furious check)
 endif()
 
 option(BUILD_INTEGRATION_TESTS "Build integration tests" ON)
