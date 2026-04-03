@@ -43,6 +43,14 @@ jobs:
           ccache-${{ github.ref }}-
           ccache-refs/heads/main-
 
+    - name: Cache FetchContent dependencies
+      uses: actions/cache@v4
+      with:
+        path: build/_deps
+        key: fetchcontent-${{ hashFiles('CMakeLists.txt') }}
+        restore-keys: |
+          fetchcontent-
+
     - name: Set reusable strings
       id: strings
       shell: bash
@@ -55,6 +63,7 @@ jobs:
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
         -S ${{ github.workspace }}
 
     - name: Build
