@@ -2,7 +2,9 @@
 #include "furious/audio/audio_clip.hpp"
 #include "furious/audio/audio_engine.hpp"
 #include "furious/audio/audio_buffer.hpp"
+#include "furious/audio/pitch_shifter.hpp"
 #include <memory>
+#include <cmath>
 
 namespace furious {
 namespace {
@@ -250,6 +252,237 @@ TEST_F(AudioEngineTest, ClipStartFrame) {
 TEST_F(AudioEngineTest, ClipEndFrame) {
     engine.set_clip_end_seconds(2.0);
     EXPECT_EQ(engine.clip_end_frame(), 88200u);
+}
+
+// --- Triple-buffer tests ---
+
+TEST_F(AudioEngineTest, TripleBufferSwapWithoutSetIsNoop) {
+    engine.swap_active_clips_if_pending();
+    EXPECT_TRUE(engine.active_clips().empty());
+}
+
+TEST_F(AudioEngineTest, TripleBufferMultipleSwapsConverge) {
+    std::vector<float> samples = {0.1f, 0.2f};
+    auto buffer = std::make_shared<const AudioBuffer>(std::move(samples), 44100, 2);
+
+    ClipAudioState state;
+    state.buffer = buffer;
+
+    engine.set_active_clips({state});
+    // Multiple swaps should be idempotent once consumed.
+    engine.swap_active_clips_if_pending();
+    engine.swap_active_clips_if_pending();
+    engine.swap_active_clips_if_pending();
+    EXPECT_EQ(engine.active_clips().size(), 1u);
+}
+
+TEST_F(AudioEngineTest, TripleBufferRapidUpdates) {
+    auto buf1 = std::make_shared<const AudioBuffer>(std::vector<float>{0.1f, 0.2f}, 44100, 2);
+    auto buf2 = std::make_shared<const AudioBuffer>(std::vector<float>{0.3f, 0.4f}, 44100, 2);
+
+    ClipAudioState state1;
+    state1.buffer = buf1;
+    ClipAudioState state2;
+    state2.buffer = buf2;
+
+    // Multiple sets before a swap — only the last should be visible.
+    engine.set_active_clips({state1});
+    engine.set_active_clips({state1, state2});
+    engine.swap_active_clips_if_pending();
+
+    EXPECT_EQ(engine.active_clips().size(), 2u);
+}
+
+TEST_F(AudioEngineTest, TripleBufferOldDataNotVisible) {
+    auto buffer = std::make_shared<const AudioBuffer>(std::vector<float>{0.1f, 0.2f}, 44100, 2);
+
+    ClipAudioState state;
+    state.buffer = buffer;
+
+    engine.set_active_clips({state, state, state});
+    engine.swap_active_clips_if_pending();
+    EXPECT_EQ(engine.active_clips().size(), 3u);
+
+    engine.set_active_clips({state});
+    engine.swap_active_clips_if_pending();
+    EXPECT_EQ(engine.active_clips().size(), 1u);
+
+    engine.set_active_clips({});
+    engine.swap_active_clips_if_pending();
+    EXPECT_TRUE(engine.active_clips().empty());
+}
+
+// --- PitchShifter pre-resolution tests ---
+
+TEST_F(AudioEngineTest, SetActiveClipsPreResolvesPitchShifter) {
+    auto buffer = std::make_shared<const AudioBuffer>(std::vector<float>{0.1f, 0.2f}, 44100, 1);
+
+    ClipAudioState state;
+    state.buffer = buffer;
+    state.clip_id = "test_clip";
+    state.autotune_enabled = true;
+
+    engine.set_active_clips({state});
+    engine.swap_active_clips_if_pending();
+
+    const auto& clips = engine.active_clips();
+    ASSERT_EQ(clips.size(), 1u);
+    EXPECT_NE(clips[0].pitch_shifter, nullptr);
+}
+
+TEST_F(AudioEngineTest, SetActiveClipsNoPitchShifterWhenAutotuneDisabled) {
+    auto buffer = std::make_shared<const AudioBuffer>(std::vector<float>{0.1f, 0.2f}, 44100, 1);
+
+    ClipAudioState state;
+    state.buffer = buffer;
+    state.clip_id = "test_clip";
+    state.autotune_enabled = false;
+
+    engine.set_active_clips({state});
+    engine.swap_active_clips_if_pending();
+
+    const auto& clips = engine.active_clips();
+    ASSERT_EQ(clips.size(), 1u);
+    EXPECT_EQ(clips[0].pitch_shifter, nullptr);
+}
+
+TEST_F(AudioEngineTest, SetActiveClipsSamePitchShifterReused) {
+    auto buffer = std::make_shared<const AudioBuffer>(std::vector<float>{0.1f, 0.2f}, 44100, 1);
+
+    ClipAudioState state;
+    state.buffer = buffer;
+    state.clip_id = "reuse_clip";
+    state.autotune_enabled = true;
+
+    engine.set_active_clips({state});
+    engine.swap_active_clips_if_pending();
+    PitchShifter* first = engine.active_clips()[0].pitch_shifter;
+
+    engine.set_active_clips({state});
+    engine.swap_active_clips_if_pending();
+    PitchShifter* second = engine.active_clips()[0].pitch_shifter;
+
+    EXPECT_EQ(first, second);
+}
+
+TEST_F(AudioEngineTest, ClearPitchShifters) {
+    auto buffer = std::make_shared<const AudioBuffer>(std::vector<float>{0.1f, 0.2f}, 44100, 1);
+
+    ClipAudioState state;
+    state.buffer = buffer;
+    state.clip_id = "clear_test";
+    state.autotune_enabled = true;
+
+    engine.set_active_clips({state});
+    engine.swap_active_clips_if_pending();
+    EXPECT_NE(engine.active_clips()[0].pitch_shifter, nullptr);
+
+    engine.clear_pitch_shifters();
+
+    // After clearing, a new set should create a fresh pitch shifter.
+    engine.set_active_clips({state});
+    engine.swap_active_clips_if_pending();
+    EXPECT_NE(engine.active_clips()[0].pitch_shifter, nullptr);
+}
+
+// --- Scratch buffer tests ---
+
+TEST_F(AudioEngineTest, ScratchBuffersAllocatedAtConstruction) {
+    EXPECT_NE(engine.scratch_mono(), nullptr);
+    EXPECT_NE(engine.scratch_indices(), nullptr);
+    EXPECT_NE(engine.scratch_processed(), nullptr);
+}
+
+// --- ClipAudioState default pitch_shifter ---
+
+TEST_F(ClipAudioStateTest, PitchShifterDefaultsToNull) {
+    ClipAudioState state;
+    EXPECT_EQ(state.pitch_shifter, nullptr);
+}
+
+// --- PitchShifter unit tests ---
+
+class PitchShifterTest : public ::testing::Test {
+protected:
+    PitchShifter shifter{44100, 1};
+};
+
+TEST_F(PitchShifterTest, DefaultPitchIsZeroCents) {
+    EXPECT_FLOAT_EQ(shifter.pitch_shift_cents(), 0.0f);
+}
+
+TEST_F(PitchShifterTest, SetPitchShiftCents) {
+    shifter.set_pitch_shift_cents(100.0f);
+    EXPECT_FLOAT_EQ(shifter.pitch_shift_cents(), 100.0f);
+}
+
+TEST_F(PitchShifterTest, SmallChangeIgnored) {
+    shifter.set_pitch_shift_cents(100.0f);
+    shifter.set_pitch_shift_cents(100.005f);
+    // Should still be 100.0f since delta < 0.01f threshold.
+    EXPECT_FLOAT_EQ(shifter.pitch_shift_cents(), 100.0f);
+}
+
+TEST_F(PitchShifterTest, PrepareDoesNotCrash) {
+    shifter.prepare(2048);
+    EXPECT_EQ(shifter.sample_rate(), 44100u);
+    EXPECT_EQ(shifter.channels(), 1u);
+}
+
+TEST_F(PitchShifterTest, ProcessZeroFramesIsNoop) {
+    float dummy = 0.0f;
+    shifter.process(&dummy, 0);
+}
+
+TEST_F(PitchShifterTest, ProcessWithNoPitchShiftCopiesInput) {
+    // Pitch shift is 0 cents, so process should copy input to output.
+    std::vector<float> input = {0.5f, -0.3f, 0.1f, 0.0f};
+    std::vector<float> output(4, 0.0f);
+
+    shifter.process(input.data(), output.data(), 4);
+
+    for (size_t i = 0; i < 4; ++i) {
+        EXPECT_FLOAT_EQ(output[i], input[i]);
+    }
+}
+
+TEST_F(PitchShifterTest, ProcessWithPitchShiftProducesOutput) {
+    shifter.prepare(512);
+    shifter.set_pitch_shift_cents(200.0f);
+
+    // Generate a simple sine wave.
+    std::vector<float> input(512);
+    for (size_t i = 0; i < 512; ++i) {
+        input[i] = std::sin(2.0f * 3.14159265f * 440.0f * static_cast<float>(i) / 44100.0f);
+    }
+
+    // RubberBand real-time mode needs several blocks to prime its internal
+    // buffers before producing output. Feed multiple blocks.
+    std::vector<float> output(512, 0.0f);
+    bool has_nonzero = false;
+    for (int block = 0; block < 8 && !has_nonzero; ++block) {
+        std::fill(output.begin(), output.end(), 0.0f);
+        shifter.process(input.data(), output.data(), 512);
+        for (float s : output) {
+            if (std::abs(s) > 1e-6f) {
+                has_nonzero = true;
+                break;
+            }
+        }
+    }
+    EXPECT_TRUE(has_nonzero);
+}
+
+TEST_F(PitchShifterTest, ResetDoesNotCrash) {
+    shifter.set_pitch_shift_cents(100.0f);
+    shifter.reset();
+}
+
+TEST_F(PitchShifterTest, StereoConstruction) {
+    PitchShifter stereo(44100, 2);
+    EXPECT_EQ(stereo.channels(), 2u);
+    EXPECT_EQ(stereo.sample_rate(), 44100u);
+    stereo.prepare(1024);
 }
 
 } // namespace

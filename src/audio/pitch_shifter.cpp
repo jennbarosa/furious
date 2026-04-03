@@ -178,6 +178,10 @@ std::vector<float> PitchShifter::process_offline(const float* input, size_t num_
     return result;
 }
 
+void PitchShifter::prepare(size_t max_frames) {
+    impl_->ensure_buffers(max_frames);
+}
+
 void PitchShifter::reset() {
     impl_->stretcher->reset();
 }

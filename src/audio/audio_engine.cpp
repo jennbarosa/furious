@@ -2,6 +2,7 @@
 #include "furious/audio/pitch_shifter.hpp"
 #include "miniaudio.h"
 #include <cmath>
+#include <cassert>
 #include <unordered_map>
 
 namespace furious {
@@ -14,12 +15,13 @@ struct AudioEngine::Impl {
     std::unordered_map<std::string, std::unique_ptr<PitchShifter>> pitch_shifter_instances;
     uint32_t sample_rate = 44100;
 
-    PitchShifter* get_or_create_pitch_shifter(const std::string& clip_id) {
+    PitchShifter* get_or_create_pitch_shifter(const std::string& clip_id, size_t prepare_frames) {
         auto it = pitch_shifter_instances.find(clip_id);
         if (it != pitch_shifter_instances.end()) {
             return it->second.get();
         }
         auto instance = std::make_unique<PitchShifter>(sample_rate, 1);
+        instance->prepare(prepare_frames);
         PitchShifter* ptr = instance.get();
         pitch_shifter_instances[clip_id] = std::move(instance);
         return ptr;
@@ -46,18 +48,21 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
 
     const auto& active_clips = engine->active_clips();
 
+    assert(frame_count <= AudioEngine::kMaxExpectedFrames);
+
+    float* mono_buffer = engine->scratch_mono();
+    uint32_t* valid_indices = engine->scratch_indices();
+    float* processed = engine->scratch_processed();
+
     for (const auto& clip_state : active_clips) {
         if (!clip_state.buffer || clip_state.buffer->empty()) continue;
 
         uint32_t channels = clip_state.buffer->channels();
 
-        bool use_rubberband = clip_state.autotune_enabled && !clip_state.clip_id.empty();
-        PitchShifter* pitch_shifter = nullptr;
+        PitchShifter* pitch_shifter = clip_state.pitch_shifter;
+        bool use_rubberband = (pitch_shifter != nullptr) && clip_state.autotune_enabled;
         if (use_rubberband) {
-            pitch_shifter = static_cast<PitchShifter*>(engine->get_pitch_shifter_for_clip(clip_state.clip_id));
-            if (pitch_shifter) {
-                pitch_shifter->set_pitch_shift_cents(clip_state.pitch_shift_cents);
-            }
+            pitch_shifter->set_pitch_shift_cents(clip_state.pitch_shift_cents);
         }
 
         double pitch_ratio = 1.0;
@@ -65,13 +70,7 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
             pitch_ratio = std::pow(2.0, static_cast<double>(clip_state.pitch_shift_cents) / 1200.0);
         }
 
-        std::vector<float> mono_buffer;
-        std::vector<ma_uint32> valid_indices;
-
-        if (use_rubberband && pitch_shifter) {
-            mono_buffer.reserve(frame_count);
-            valid_indices.reserve(frame_count);
-        }
+        size_t mono_count = 0;
 
         for (ma_uint32 i = 0; i < frame_count; ++i) {
             int64_t global_frame = static_cast<int64_t>(current_frame + i);
@@ -113,10 +112,11 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
                 right = left;
             }
 
-            if (use_rubberband && pitch_shifter) {
+            if (use_rubberband) {
                 float mono = (left + right) * 0.5f;
-                mono_buffer.push_back(mono);
-                valid_indices.push_back(i);
+                mono_buffer[mono_count] = mono;
+                valid_indices[mono_count] = i;
+                ++mono_count;
             } else {
                 float final_vol = clip_state.volume * engine->clip_volume();
                 out[i * 2] += left * final_vol;
@@ -124,13 +124,12 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
             }
         }
 
-        if (use_rubberband && pitch_shifter && !mono_buffer.empty()) {
-            std::vector<float> processed(mono_buffer.size());
-            pitch_shifter->process(mono_buffer.data(), processed.data(), mono_buffer.size());
+        if (use_rubberband && mono_count > 0) {
+            pitch_shifter->process(mono_buffer, processed, mono_count);
 
             float final_vol = clip_state.volume * engine->clip_volume();
-            for (size_t j = 0; j < valid_indices.size(); ++j) {
-                ma_uint32 i = valid_indices[j];
+            for (size_t j = 0; j < mono_count; ++j) {
+                uint32_t i = valid_indices[j];
                 float sample = processed[j];
                 out[i * 2] += sample * final_vol;
                 out[i * 2 + 1] += sample * final_vol;
@@ -196,6 +195,9 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
 
 AudioEngine::AudioEngine() : impl_(std::make_unique<Impl>()) {
     generate_click_sounds();
+    scratch_mono_.resize(kMaxExpectedFrames);
+    scratch_indices_.resize(kMaxExpectedFrames);
+    scratch_processed_.resize(kMaxExpectedFrames);
 }
 
 AudioEngine::~AudioEngine() {
@@ -373,21 +375,28 @@ uint64_t AudioEngine::clip_end_frame() const {
 }
 
 void AudioEngine::set_active_clips(std::vector<ClipAudioState> clips) {
-    std::lock_guard<std::mutex> lock(clips_mutex_);
-    active_clips_back_ = std::move(clips);
-    clips_swap_pending_ = true;
+    // Pre-resolve pitch shifters on the UI thread so the audio callback
+    // never allocates or does map lookups.
+    for (auto& clip : clips) {
+        if (clip.autotune_enabled && !clip.clip_id.empty()) {
+            clip.pitch_shifter = impl_->get_or_create_pitch_shifter(clip.clip_id, kMaxExpectedFrames);
+        }
+    }
+
+    clip_buffers_[write_index_] = std::move(clips);
+    // Publish: atomically swap write_index_ with latest_index_.
+    // The old latest becomes the new write buffer (not being read by audio thread).
+    write_index_ = latest_index_.exchange(write_index_);
 }
 
 void AudioEngine::swap_active_clips_if_pending() {
-    if (clips_swap_pending_.load()) {
-        std::lock_guard<std::mutex> lock(clips_mutex_);
-        std::swap(active_clips_front_, active_clips_back_);
-        clips_swap_pending_ = false;
-    }
+    // Pick up the latest published buffer, giving back our current read buffer.
+    // This is lock-free: atomic exchange on an int.
+    read_index_ = latest_index_.exchange(read_index_);
 }
 
 void* AudioEngine::get_pitch_shifter_for_clip(const std::string& clip_id) {
-    return impl_->get_or_create_pitch_shifter(clip_id);
+    return impl_->get_or_create_pitch_shifter(clip_id, kMaxExpectedFrames);
 }
 
 void AudioEngine::reset_pitch_shifter(const std::string& clip_id) {
