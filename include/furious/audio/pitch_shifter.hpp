@@ -25,6 +25,8 @@ public:
 
     std::vector<float> process_offline(const float* input, size_t num_frames);
 
+    void prepare(size_t max_frames);
+
     void reset();
 
     [[nodiscard]] uint32_t sample_rate() const;
