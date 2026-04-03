@@ -138,29 +138,7 @@ static void audio_callback(ma_device* device, void* output, const void* /*input*
     }
 
     if (has_clip) {
-        const AudioClip* clip = engine->clip();
-        uint32_t channels = clip->channels();
-        uint64_t start_frame = engine->clip_start_frame();
-        uint64_t end_frame = engine->clip_end_frame();
-        uint64_t trimmed_duration = end_frame - start_frame;
-        float bgm_vol = engine->bgm_volume();
-
-        for (ma_uint32 i = 0; i < frame_count; ++i) {
-            uint64_t playhead_pos = current_frame + i;
-            if (playhead_pos < trimmed_duration) {
-                uint64_t clip_frame = start_frame + playhead_pos;
-                if (clip_frame < clip->total_frames()) {
-                    size_t sample_index = clip_frame * channels;
-                    if (channels >= 2) {
-                        out[i * 2] += clip->data()[sample_index] * bgm_vol;
-                        out[i * 2 + 1] += clip->data()[sample_index + 1] * bgm_vol;
-                    } else {
-                        out[i * 2] += clip->data()[sample_index] * bgm_vol;
-                        out[i * 2 + 1] += clip->data()[sample_index] * bgm_vol;
-                    }
-                }
-            }
-        }
+        engine->mix_bgm(out, frame_count, current_frame);
     }
 
     if (engine->metronome_enabled()) {
@@ -263,11 +241,11 @@ void AudioEngine::shutdown() {
 }
 
 bool AudioEngine::load_clip(const std::string& filepath) {
-    auto new_clip = std::make_unique<AudioClip>();
+    auto new_clip = std::make_shared<AudioClip>();
     if (!new_clip->load(filepath)) {
         return false;
     }
-    clip_ = std::move(new_clip);
+    clip_.store(std::move(new_clip));
     playhead_frame_ = 0;
     reset_clip_bounds();
     return true;
@@ -275,7 +253,35 @@ bool AudioEngine::load_clip(const std::string& filepath) {
 
 void AudioEngine::unload_clip() {
     stop();
-    clip_.reset();
+    clip_.store(std::shared_ptr<AudioClip>{});
+}
+
+void AudioEngine::mix_bgm(float* output, uint32_t frame_count, uint64_t current_frame) {
+    auto clip = clip_.load();
+    if (!clip || !clip->is_loaded()) return;
+
+    uint32_t channels = clip->channels();
+    uint64_t start_frame = clip_start_frame();
+    uint64_t end_frame = clip_end_frame();
+    uint64_t trimmed_duration = end_frame - start_frame;
+    float bgm_vol = bgm_volume();
+
+    for (uint32_t i = 0; i < frame_count; ++i) {
+        uint64_t playhead_pos = current_frame + i;
+        if (playhead_pos < trimmed_duration) {
+            uint64_t cf = start_frame + playhead_pos;
+            if (cf < clip->total_frames()) {
+                size_t sample_index = cf * channels;
+                if (channels >= 2) {
+                    output[i * 2] += clip->data()[sample_index] * bgm_vol;
+                    output[i * 2 + 1] += clip->data()[sample_index + 1] * bgm_vol;
+                } else {
+                    output[i * 2] += clip->data()[sample_index] * bgm_vol;
+                    output[i * 2 + 1] += clip->data()[sample_index] * bgm_vol;
+                }
+            }
+        }
+    }
 }
 
 void AudioEngine::play() {
@@ -293,7 +299,8 @@ void AudioEngine::stop() {
 
 void AudioEngine::set_playhead_seconds(double seconds) {
     uint64_t frame = static_cast<uint64_t>(seconds * sample_rate_);
-    if (clip_ && clip_->is_loaded()) {
+    auto c = clip_.load();
+    if (c && c->is_loaded()) {
         uint64_t trimmed_duration = clip_end_frame() - clip_start_frame();
         playhead_frame_ = std::min(frame, trimmed_duration);
     } else {
@@ -314,7 +321,8 @@ void AudioEngine::set_bpm(double bpm) {
 void AudioEngine::advance_playhead(uint32_t frames) {
     uint64_t new_frame = playhead_frame_.load() + frames;
 
-    if (clip_ && clip_->is_loaded()) {
+    auto c = clip_.load();
+    if (c && c->is_loaded()) {
         uint64_t trimmed_duration = clip_end_frame() - clip_start_frame();
         if (new_frame >= trimmed_duration) {
             new_frame = trimmed_duration;
@@ -328,7 +336,8 @@ void AudioEngine::advance_playhead(uint32_t frames) {
 void AudioEngine::set_clip_start_seconds(double seconds) {
     if (seconds >= 0.0) {
         clip_start_seconds_ = seconds;
-        if (clip_ && clip_->is_loaded()) {
+        auto c = clip_.load();
+        if (c && c->is_loaded()) {
             uint64_t trimmed_duration = clip_end_frame() - clip_start_frame();
             if (playhead_frame_.load() > trimmed_duration) {
                 playhead_frame_ = trimmed_duration;
@@ -340,7 +349,8 @@ void AudioEngine::set_clip_start_seconds(double seconds) {
 void AudioEngine::set_clip_end_seconds(double seconds) {
     if (seconds >= 0.0) {
         clip_end_seconds_ = seconds;
-        if (clip_ && clip_->is_loaded()) {
+        auto c = clip_.load();
+        if (c && c->is_loaded()) {
             uint64_t trimmed_duration = clip_end_frame() - clip_start_frame();
             if (playhead_frame_.load() > trimmed_duration) {
                 playhead_frame_ = trimmed_duration;
@@ -351,8 +361,9 @@ void AudioEngine::set_clip_end_seconds(double seconds) {
 
 void AudioEngine::reset_clip_bounds() {
     clip_start_seconds_ = 0.0;
-    if (clip_ && clip_->is_loaded()) {
-        clip_end_seconds_ = clip_->duration_seconds();
+    auto c = clip_.load();
+    if (c && c->is_loaded()) {
+        clip_end_seconds_ = c->duration_seconds();
     } else {
         clip_end_seconds_ = 0.0;
     }
@@ -368,8 +379,11 @@ uint64_t AudioEngine::clip_start_frame() const {
 
 uint64_t AudioEngine::clip_end_frame() const {
     double end_seconds = clip_end_seconds_.load();
-    if (end_seconds <= 0.0 && clip_ && clip_->is_loaded()) {
-        return clip_->total_frames();
+    if (end_seconds <= 0.0) {
+        auto c = clip_.load();
+        if (c && c->is_loaded()) {
+            return c->total_frames();
+        }
     }
     return static_cast<uint64_t>(end_seconds * sample_rate_);
 }
