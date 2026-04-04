@@ -13,7 +13,7 @@ if(CCACHE_PROGRAM)
 endif()
 
 option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
-if(ENABLE_ASAN)
+if(ENABLE_ASAN AND NOT MSVC)
     add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g)
     add_link_options(-fsanitize=address)
 endif()
@@ -116,8 +116,12 @@ add_library(lua_static STATIC
 )
 
 target_include_directories(lua_static PUBLIC ${LUA_SRC_DIR})
-target_compile_definitions(lua_static PRIVATE LUA_USE_POSIX)
-if(UNIX AND NOT APPLE)
+if(WIN32)
+    target_compile_definitions(lua_static PRIVATE LUA_USE_WINDOWS)
+elseif(APPLE)
+    target_compile_definitions(lua_static PRIVATE LUA_USE_MACOSX)
+else()
+    target_compile_definitions(lua_static PRIVATE LUA_USE_POSIX)
     target_link_libraries(lua_static PRIVATE m dl)
 endif()
 
@@ -126,13 +130,61 @@ target_include_directories(miniaudio INTERFACE ${miniaudio_SOURCE_DIR})
 
 find_package(OpenGL REQUIRED)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
-pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
-pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
-pkg_check_modules(SWSCALE REQUIRED IMPORTED_TARGET libswscale)
-pkg_check_modules(SWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
-pkg_check_modules(RUBBERBAND REQUIRED IMPORTED_TARGET rubberband)
+if(WIN32)
+    find_package(PkgConfig)
+else()
+    find_package(PkgConfig REQUIRED)
+endif()
+
+if(PkgConfig_FOUND)
+    pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
+    pkg_check_modules(AVFORMAT REQUIRED IMPORTED_TARGET libavformat)
+    pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
+    pkg_check_modules(SWSCALE REQUIRED IMPORTED_TARGET libswscale)
+    pkg_check_modules(SWRESAMPLE REQUIRED IMPORTED_TARGET libswresample)
+    pkg_check_modules(RUBBERBAND REQUIRED IMPORTED_TARGET rubberband)
+    set(FFMPEG_LIBS
+        PkgConfig::AVCODEC PkgConfig::AVFORMAT PkgConfig::AVUTIL
+        PkgConfig::SWSCALE PkgConfig::SWRESAMPLE
+    )
+    set(RUBBERBAND_LIB PkgConfig::RUBBERBAND)
+else()
+    find_path(AVCODEC_INCLUDE_DIR libavcodec/avcodec.h)
+    find_path(AVFORMAT_INCLUDE_DIR libavformat/avformat.h)
+    find_path(AVUTIL_INCLUDE_DIR libavutil/avutil.h)
+    find_path(SWSCALE_INCLUDE_DIR libswscale/swscale.h)
+    find_path(SWRESAMPLE_INCLUDE_DIR libswresample/swresample.h)
+
+    find_library(AVCODEC_LIB avcodec)
+    find_library(AVFORMAT_LIB avformat)
+    find_library(AVUTIL_LIB avutil)
+    find_library(SWSCALE_LIB swscale)
+    find_library(SWRESAMPLE_LIB swresample)
+    find_library(RUBBERBAND_LIBRARY rubberband)
+
+    if(NOT AVCODEC_LIB OR NOT AVFORMAT_LIB OR NOT AVUTIL_LIB OR NOT SWSCALE_LIB OR NOT SWRESAMPLE_LIB)
+        message(FATAL_ERROR "FFmpeg libraries not found. Install FFmpeg development libraries (e.g. via vcpkg).")
+    endif()
+    if(NOT RUBBERBAND_LIBRARY)
+        message(FATAL_ERROR "Rubberband library not found. Install rubberband (e.g. via vcpkg).")
+    endif()
+
+    add_library(ffmpeg_libs INTERFACE)
+    target_include_directories(ffmpeg_libs INTERFACE
+        ${AVCODEC_INCLUDE_DIR} ${AVFORMAT_INCLUDE_DIR} ${AVUTIL_INCLUDE_DIR}
+        ${SWSCALE_INCLUDE_DIR} ${SWRESAMPLE_INCLUDE_DIR}
+    )
+    target_link_libraries(ffmpeg_libs INTERFACE
+        ${AVCODEC_LIB} ${AVFORMAT_LIB} ${AVUTIL_LIB}
+        ${SWSCALE_LIB} ${SWRESAMPLE_LIB}
+    )
+
+    add_library(rubberband_lib INTERFACE)
+    target_link_libraries(rubberband_lib INTERFACE ${RUBBERBAND_LIBRARY})
+
+    set(FFMPEG_LIBS ffmpeg_libs)
+    set(RUBBERBAND_LIB rubberband_lib)
+endif()
 
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -235,13 +287,13 @@ target_link_libraries(furious_lib PUBLIC
     nfd
     magic_enum::magic_enum
     lua_static
-    PkgConfig::AVCODEC
-    PkgConfig::AVFORMAT
-    PkgConfig::AVUTIL
-    PkgConfig::SWSCALE
-    PkgConfig::SWRESAMPLE
-    PkgConfig::RUBBERBAND
+    ${FFMPEG_LIBS}
+    ${RUBBERBAND_LIB}
 )
+
+if(WIN32)
+    target_link_libraries(furious_lib PUBLIC psapi)
+endif()
 
 add_executable(furious src/main.cpp)
 target_link_libraries(furious PRIVATE furious_lib)
@@ -337,12 +389,8 @@ if(BUILD_INTEGRATION_TESTS)
         nfd
         magic_enum::magic_enum
         lua_static
-        PkgConfig::AVCODEC
-        PkgConfig::AVFORMAT
-        PkgConfig::AVUTIL
-        PkgConfig::SWSCALE
-        PkgConfig::SWRESAMPLE
-        PkgConfig::RUBBERBAND
+        ${FFMPEG_LIBS}
+        ${RUBBERBAND_LIB}
     )
 
     add_executable(furious_integration_tests

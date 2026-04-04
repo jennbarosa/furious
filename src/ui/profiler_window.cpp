@@ -1,6 +1,7 @@
 #include "furious/ui/profiler_window.hpp"
 #include "imgui.h"
 #include <algorithm>
+#include <cinttypes>
 #include <cstdio>
 #include <fstream>
 #include <numeric>
@@ -9,6 +10,11 @@
 #ifdef __linux__
 #include <sys/resource.h>
 #include <unistd.h>
+#elif defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <psapi.h>
 #endif
 
 namespace furious {
@@ -77,6 +83,11 @@ float ProfilerWindow::get_process_memory_mb() {
         long page_size = sysconf(_SC_PAGESIZE);
         return static_cast<float>(resident * page_size) / (1024.0f * 1024.0f);
     }
+#elif defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        return static_cast<float>(pmc.WorkingSetSize) / (1024.0f * 1024.0f);
+    }
 #endif
     return 0.0f;
 }
@@ -86,15 +97,15 @@ float ProfilerWindow::get_cpu_usage() {
     std::ifstream stat("/proc/stat");
     if (stat.is_open()) {
         std::string cpu;
-        unsigned long user, nice, system, idle, iowait, irq, softirq;
+        uint64_t user, nice, system, idle, iowait, irq, softirq;
         stat >> cpu >> user >> nice >> system >> idle >> iowait >> irq >> softirq;
 
-        unsigned long total = user + nice + system + idle + iowait + irq + softirq;
-        unsigned long idle_total = idle + iowait;
+        uint64_t total = user + nice + system + idle + iowait + irq + softirq;
+        uint64_t idle_total = idle + iowait;
 
         if (last_cpu_total_ > 0) {
-            unsigned long total_diff = total - last_cpu_total_;
-            unsigned long idle_diff = idle_total - last_cpu_idle_;
+            uint64_t total_diff = total - last_cpu_total_;
+            uint64_t idle_diff = idle_total - last_cpu_idle_;
 
             if (total_diff > 0) {
                 float usage = 100.0f * (1.0f - static_cast<float>(idle_diff) / static_cast<float>(total_diff));
@@ -106,6 +117,31 @@ float ProfilerWindow::get_cpu_usage() {
 
         last_cpu_total_ = total;
         last_cpu_idle_ = idle_total;
+    }
+#elif defined(_WIN32)
+    FILETIME idle_time, kernel_time, user_time;
+    if (GetSystemTimes(&idle_time, &kernel_time, &user_time)) {
+        auto to_uint64 = [](const FILETIME& ft) -> uint64_t {
+            return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+        };
+        uint64_t idle_val = to_uint64(idle_time);
+        uint64_t kernel_val = to_uint64(kernel_time);
+        uint64_t user_val = to_uint64(user_time);
+        uint64_t total = kernel_val + user_val;
+
+        if (last_cpu_total_ > 0) {
+            uint64_t total_diff = total - last_cpu_total_;
+            uint64_t idle_diff = idle_val - last_cpu_idle_;
+            if (total_diff > 0) {
+                float usage = 100.0f * (1.0f - static_cast<float>(idle_diff) / static_cast<float>(total_diff));
+                last_cpu_total_ = total;
+                last_cpu_idle_ = idle_val;
+                return std::clamp(usage, 0.0f, 100.0f);
+            }
+        }
+
+        last_cpu_total_ = total;
+        last_cpu_idle_ = idle_val;
     }
 #endif
     return 0.0f;
@@ -142,10 +178,10 @@ void ProfilerWindow::render() {
 
     ImGui::Separator();
 
-    ImGui::Text("Allocations: %lu/frame (%lu bytes)",
+    ImGui::Text("Allocations: %" PRIu64 "/frame (%" PRIu64 " bytes)",
                 last_frame_allocs_,
                 AllocationStats::frame_bytes.load());
-    ImGui::Text("Total: %lu allocs, %lu deallocs",
+    ImGui::Text("Total: %" PRIu64 " allocs, %" PRIu64 " deallocs",
                 AllocationStats::total_allocations.load(),
                 AllocationStats::total_deallocations.load());
 
