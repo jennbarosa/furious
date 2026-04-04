@@ -7,7 +7,7 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
 
     strategy:
@@ -38,18 +38,18 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.cache/ccache
-        key: ccache-${{ github.ref }}-${{ github.sha }}
+        key: ccache-linux-${{ github.ref }}-${{ github.sha }}
         restore-keys: |
-          ccache-${{ github.ref }}-
-          ccache-refs/heads/main-
+          ccache-linux-${{ github.ref }}-
+          ccache-linux-refs/heads/main-
 
     - name: Cache FetchContent dependencies
       uses: actions/cache@v4
       with:
         path: build/_deps
-        key: fetchcontent-${{ hashFiles('CMakeLists.txt') }}
+        key: fetchcontent-linux-${{ hashFiles('CMakeLists.txt') }}
         restore-keys: |
-          fetchcontent-
+          fetchcontent-linux-
 
     - name: Set reusable strings
       id: strings
@@ -72,3 +72,46 @@ jobs:
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       run: xvfb-run ctest --build-config ${{ matrix.build_type }} --output-on-failure
+
+  build-windows:
+    runs-on: windows-latest
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Cache vcpkg installed packages
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+        key: vcpkg-x64-windows-ffmpeg-rubberband-${{ hashFiles('.github/workflows/cmake-multi-platform.yml') }}
+        restore-keys: |
+          vcpkg-x64-windows-ffmpeg-rubberband-
+
+    - name: Install dependencies via vcpkg
+      run: vcpkg install ffmpeg[avcodec,avformat,swscale,swresample] rubberband
+      shell: bash
+
+    - name: Cache FetchContent dependencies
+      uses: actions/cache@v4
+      with:
+        path: build/_deps
+        key: fetchcontent-windows-${{ hashFiles('CMakeLists.txt') }}
+        restore-keys: |
+          fetchcontent-windows-
+
+    - name: Configure CMake
+      run: >
+        cmake -B build
+        -DCMAKE_BUILD_TYPE=Release
+        "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+        -DBUILD_INTEGRATION_TESTS=OFF
+        -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Test
+      working-directory: build
+      run: ctest --build-config Release --output-on-failure

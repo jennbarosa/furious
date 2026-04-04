@@ -35,9 +35,11 @@ bool Application::initialize() {
 }
 
 bool Application::init_glfw() {
+#ifdef __linux__
     // FIXME: Force X11 on Linux to avoid Wayland resize issues.
     // There is very horrible lag on KDE wayland when resizing the window.
     glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+#endif
 
     if (!glfwInit()) {
         std::fprintf(stderr, "Failed to initialize GLFW\n");

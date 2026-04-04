@@ -1,6 +1,11 @@
 #include "furious/video/video_engine.hpp"
 #include "furious/video/video_decoder.hpp"
 #include <GLFW/glfw3.h>
+
+// Windows gl.h only provides OpenGL 1.1; GL_CLAMP_TO_EDGE is OpenGL 1.2+
+#ifndef GL_CLAMP_TO_EDGE
+#define GL_CLAMP_TO_EDGE 0x812F
+#endif
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>

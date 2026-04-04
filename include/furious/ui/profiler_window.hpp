@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace furious {
@@ -56,8 +57,8 @@ private:
     float avg_frame_time_ms_ = 0.0f;
     uint64_t last_frame_allocs_ = 0;
 
-    unsigned long last_cpu_total_ = 0;
-    unsigned long last_cpu_idle_ = 0;
+    uint64_t last_cpu_total_ = 0;
+    uint64_t last_cpu_idle_ = 0;
 
     std::string video_decoder_info_ = "None";
 
