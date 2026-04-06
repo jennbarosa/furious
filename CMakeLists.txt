@@ -275,6 +275,20 @@ add_library(furious_lib STATIC
 
 set_target_properties(furious_lib PROPERTIES UNITY_BUILD ON)
 
+target_precompile_headers(furious_lib PRIVATE
+    <string>
+    <vector>
+    <memory>
+    <cstdint>
+    <optional>
+    <unordered_map>
+    <algorithm>
+    <cmath>
+    <chrono>
+    <expected>
+    <nlohmann/json.hpp>
+)
+
 target_include_directories(furious_lib PUBLIC
     ${CMAKE_SOURCE_DIR}/include
     ${sol2_SOURCE_DIR}/include
@@ -392,6 +406,8 @@ if(BUILD_INTEGRATION_TESTS)
         ${FFMPEG_LIBS}
         ${RUBBERBAND_LIB}
     )
+
+    target_precompile_headers(furious_lib_testable REUSE_FROM furious_lib)
 
     add_executable(furious_integration_tests
         tests/integration/integration_main.cpp
