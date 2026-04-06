@@ -1,0 +1,11 @@
+{
+  "name": "furious",
+  "version": "0.1.0",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "features": ["avcodec", "avformat", "swscale", "swresample"]
+    },
+    "rubberband"
+  ]
+}
