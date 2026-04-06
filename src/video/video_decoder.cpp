@@ -1,13 +1,11 @@
 #include "furious/video/video_decoder.hpp"
+#include "furious/av_ptr.hpp"
 
 #include <algorithm>
 
 extern "C" {
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/hwcontext.h>
-#include <libswscale/swscale.h>
 }
 
 namespace furious {
@@ -16,22 +14,22 @@ constexpr int MAX_PREVIEW_WIDTH = 1280;
 constexpr int MAX_PREVIEW_HEIGHT = 720;
 
 struct VideoDecoder::Impl {
-    AVFormatContext* format_ctx = nullptr;
-    AVCodecContext* codec_ctx = nullptr;
-    AVBufferRef* hw_device_ctx = nullptr;  
-    SwsContext* sws_ctx = nullptr;
-    AVFrame* frame = nullptr;
-    AVFrame* sw_frame = nullptr;  
-    AVFrame* frame_rgba = nullptr;
-    AVPacket* packet = nullptr;
+    AVFormatContextPtr format_ctx;
+    AVBufferRefPtr hw_device_ctx;
+    AVCodecContextPtr codec_ctx;
+    SwsContextPtr sws_ctx;
+    AVFramePtr frame_rgba;
+    AVFramePtr sw_frame;
+    AVFramePtr frame;
+    AVPacketPtr packet;
 
     int video_stream_index = -1;
-    int source_width = 0;   
+    int source_width = 0;
     int source_height = 0;
-    int width = 0;          
+    int width = 0;
     int height = 0;
-    int pix_fmt = -1;  
-    AVPixelFormat hw_pix_fmt = AV_PIX_FMT_NONE;  
+    int pix_fmt = -1;
+    AVPixelFormat hw_pix_fmt = AV_PIX_FMT_NONE;
     double fps = 30.0;
     double duration_seconds = 0.0;
     int64_t total_frames = 0;
@@ -41,7 +39,7 @@ struct VideoDecoder::Impl {
     std::string decoder_name = "None";
 
     double last_decoded_pts = -1.0;
-    bool has_buffered_frame = false;  
+    bool has_buffered_frame = false;
 };
 
 VideoDecoder::VideoDecoder() : impl_(std::make_unique<Impl>()) {}
@@ -53,11 +51,13 @@ VideoDecoder::~VideoDecoder() {
 bool VideoDecoder::open(const std::string& filepath) {
     close();
 
-    if (avformat_open_input(&impl_->format_ctx, filepath.c_str(), nullptr, nullptr) < 0) {
+    AVFormatContext* fmt_raw = nullptr;
+    if (avformat_open_input(&fmt_raw, filepath.c_str(), nullptr, nullptr) < 0) {
         return false;
     }
+    impl_->format_ctx.reset(fmt_raw);
 
-    if (avformat_find_stream_info(impl_->format_ctx, nullptr) < 0) {
+    if (avformat_find_stream_info(impl_->format_ctx.get(), nullptr) < 0) {
         close();
         return false;
     }
@@ -92,75 +92,82 @@ bool VideoDecoder::open(const std::string& filepath) {
 
     const AVCodec* codec = nullptr;
 
-    void* iter = nullptr;
-    while ((codec = av_codec_iterate(&iter)) != nullptr) {
-        if (!av_codec_is_decoder(codec)) continue;
-        if (codec->id != codecpar->codec_id) continue;
+    bool hw_ready = [&]() -> bool {
+        void* iter = nullptr;
+        const AVCodec* hw_codec = nullptr;
+        while ((hw_codec = av_codec_iterate(&iter)) != nullptr) {
+            if (!av_codec_is_decoder(hw_codec)) continue;
+            if (hw_codec->id != codecpar->codec_id) continue;
 
-        for (int i = 0; hw_types[i] != AV_HWDEVICE_TYPE_NONE; ++i) {
-            for (int j = 0;; ++j) {
-                const AVCodecHWConfig* config = avcodec_get_hw_config(codec, j);
-                if (!config) break;
+            for (int i = 0; hw_types[i] != AV_HWDEVICE_TYPE_NONE; ++i) {
+                for (int j = 0;; ++j) {
+                    const AVCodecHWConfig* config = avcodec_get_hw_config(hw_codec, j);
+                    if (!config) break;
 
-                if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX &&
-                    config->device_type == hw_types[i]) {
-                    if (av_hwdevice_ctx_create(&impl_->hw_device_ctx, hw_types[i],
-                                               nullptr, nullptr, 0) >= 0) {
-                        impl_->codec_ctx = avcodec_alloc_context3(codec);
-                        if (!impl_->codec_ctx) {
-                            av_buffer_unref(&impl_->hw_device_ctx);
-                            continue;
+                    if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX &&
+                        config->device_type == hw_types[i]) {
+                        AVBufferRef* hw_ctx_raw = nullptr;
+                        if (av_hwdevice_ctx_create(&hw_ctx_raw, hw_types[i],
+                                                   nullptr, nullptr, 0) >= 0) {
+                            impl_->hw_device_ctx.reset(hw_ctx_raw);
+                            impl_->codec_ctx.reset(avcodec_alloc_context3(hw_codec));
+                            if (!impl_->codec_ctx) {
+                                impl_->hw_device_ctx.reset();
+                                continue;
+                            }
+
+                            if (avcodec_parameters_to_context(impl_->codec_ctx.get(), codecpar) < 0) {
+                                impl_->codec_ctx.reset();
+                                impl_->hw_device_ctx.reset();
+                                continue;
+                            }
+
+                            impl_->codec_ctx->hw_device_ctx = av_buffer_ref(impl_->hw_device_ctx.get());
+                            impl_->hw_pix_fmt = config->pix_fmt;
+
+                            if (avcodec_open2(impl_->codec_ctx.get(), hw_codec, nullptr) >= 0) {
+                                impl_->using_hw_decode = true;
+                                impl_->decoder_name = std::string(hw_codec->name) + " + " +
+                                                      av_hwdevice_get_type_name(hw_types[i]) + " (HW)";
+                                codec = hw_codec;
+                                return true;
+                            }
+
+                            impl_->codec_ctx.reset();
+                            impl_->hw_device_ctx.reset();
                         }
-
-                        if (avcodec_parameters_to_context(impl_->codec_ctx, codecpar) < 0) {
-                            avcodec_free_context(&impl_->codec_ctx);
-                            av_buffer_unref(&impl_->hw_device_ctx);
-                            continue;
-                        }
-
-                        impl_->codec_ctx->hw_device_ctx = av_buffer_ref(impl_->hw_device_ctx);
-                        impl_->hw_pix_fmt = config->pix_fmt;
-
-                        if (avcodec_open2(impl_->codec_ctx, codec, nullptr) >= 0) {
-                            impl_->using_hw_decode = true;
-                            impl_->decoder_name = std::string(codec->name) + " + " +
-                                                  av_hwdevice_get_type_name(hw_types[i]) + " (HW)";
-                            goto decoder_ready;
-                        }
-
-                        avcodec_free_context(&impl_->codec_ctx);
-                        av_buffer_unref(&impl_->hw_device_ctx);
                     }
                 }
             }
         }
-    }
-
-    codec = avcodec_find_decoder(codecpar->codec_id);
-    if (!codec) {
-        close();
         return false;
+    }();
+
+    if (!hw_ready) {
+        codec = avcodec_find_decoder(codecpar->codec_id);
+        if (!codec) {
+            close();
+            return false;
+        }
+
+        impl_->codec_ctx.reset(avcodec_alloc_context3(codec));
+        if (!impl_->codec_ctx) {
+            close();
+            return false;
+        }
+
+        if (avcodec_parameters_to_context(impl_->codec_ctx.get(), codecpar) < 0) {
+            close();
+            return false;
+        }
+
+        if (avcodec_open2(impl_->codec_ctx.get(), codec, nullptr) < 0) {
+            close();
+            return false;
+        }
+
+        impl_->decoder_name = std::string(codec->name) + " (SW)";
     }
-
-    impl_->codec_ctx = avcodec_alloc_context3(codec);
-    if (!impl_->codec_ctx) {
-        close();
-        return false;
-    }
-
-    if (avcodec_parameters_to_context(impl_->codec_ctx, codecpar) < 0) {
-        close();
-        return false;
-    }
-
-    if (avcodec_open2(impl_->codec_ctx, codec, nullptr) < 0) {
-        close();
-        return false;
-    }
-
-    impl_->decoder_name = std::string(codec->name) + " (SW)";
-
-decoder_ready:
 
     impl_->source_width = impl_->codec_ctx->width;
     impl_->source_height = impl_->codec_ctx->height;
@@ -202,21 +209,21 @@ decoder_ready:
 
     impl_->total_frames = static_cast<int64_t>(impl_->duration_seconds * impl_->fps);
 
-    impl_->sws_ctx = sws_getContext(
+    impl_->sws_ctx.reset(sws_getContext(
         impl_->source_width, impl_->source_height, static_cast<AVPixelFormat>(impl_->pix_fmt),
         impl_->width, impl_->height, AV_PIX_FMT_RGBA,
         SWS_BILINEAR, nullptr, nullptr, nullptr
-    );
+    ));
 
     if (!impl_->sws_ctx) {
         close();
         return false;
     }
 
-    impl_->frame = av_frame_alloc();
-    impl_->sw_frame = av_frame_alloc();  
-    impl_->frame_rgba = av_frame_alloc();
-    impl_->packet = av_packet_alloc();
+    impl_->frame.reset(av_frame_alloc());
+    impl_->sw_frame.reset(av_frame_alloc());
+    impl_->frame_rgba.reset(av_frame_alloc());
+    impl_->packet.reset(av_packet_alloc());
 
     if (!impl_->frame || !impl_->sw_frame || !impl_->frame_rgba || !impl_->packet) {
         close();
@@ -228,31 +235,14 @@ decoder_ready:
 }
 
 void VideoDecoder::close() {
-    if (impl_->packet) {
-        av_packet_free(&impl_->packet);
-    }
-    if (impl_->frame) {
-        av_frame_free(&impl_->frame);
-    }
-    if (impl_->sw_frame) {
-        av_frame_free(&impl_->sw_frame);
-    }
-    if (impl_->frame_rgba) {
-        av_frame_free(&impl_->frame_rgba);
-    }
-    if (impl_->sws_ctx) {
-        sws_freeContext(impl_->sws_ctx);
-        impl_->sws_ctx = nullptr;
-    }
-    if (impl_->codec_ctx) {
-        avcodec_free_context(&impl_->codec_ctx);
-    }
-    if (impl_->hw_device_ctx) {
-        av_buffer_unref(&impl_->hw_device_ctx);
-    }
-    if (impl_->format_ctx) {
-        avformat_close_input(&impl_->format_ctx);
-    }
+    impl_->packet.reset();
+    impl_->frame.reset();
+    impl_->sw_frame.reset();
+    impl_->frame_rgba.reset();
+    impl_->sws_ctx.reset();
+    impl_->codec_ctx.reset();
+    impl_->hw_device_ctx.reset();
+    impl_->format_ctx.reset();
 
     impl_->video_stream_index = -1;
     impl_->source_width = 0;
@@ -300,43 +290,43 @@ bool VideoDecoder::seek_and_decode(double timestamp_seconds, std::vector<uint8_t
     if (need_seek) {
         int64_t target_ts = static_cast<int64_t>(timestamp_seconds / av_q2d(video_stream->time_base));
 
-        if (av_seek_frame(impl_->format_ctx, impl_->video_stream_index, target_ts,
+        if (av_seek_frame(impl_->format_ctx.get(), impl_->video_stream_index, target_ts,
                           AVSEEK_FLAG_BACKWARD) < 0) {
             return false;
         }
 
-        avcodec_flush_buffers(impl_->codec_ctx);
+        avcodec_flush_buffers(impl_->codec_ctx.get());
         impl_->last_decoded_pts = -1.0;
     }
 
-    bool tried_seek_fallback = need_seek; 
+    bool tried_seek_fallback = need_seek;
 
 retry_decode:
     int read_result;
-    while ((read_result = av_read_frame(impl_->format_ctx, impl_->packet)) >= 0) {
+    while ((read_result = av_read_frame(impl_->format_ctx.get(), impl_->packet.get())) >= 0) {
         if (impl_->packet->stream_index != impl_->video_stream_index) {
-            av_packet_unref(impl_->packet);
+            av_packet_unref(impl_->packet.get());
             continue;
         }
 
-        int ret = avcodec_send_packet(impl_->codec_ctx, impl_->packet);
-        av_packet_unref(impl_->packet);
+        int ret = avcodec_send_packet(impl_->codec_ctx.get(), impl_->packet.get());
+        av_packet_unref(impl_->packet.get());
 
         if (ret < 0) continue;
 
-        while (avcodec_receive_frame(impl_->codec_ctx, impl_->frame) >= 0) {
+        while (avcodec_receive_frame(impl_->codec_ctx.get(), impl_->frame.get()) >= 0) {
             double frame_ts = static_cast<double>(impl_->frame->pts) *
                 av_q2d(video_stream->time_base);
 
             if (frame_ts >= timestamp_seconds - (frame_duration * 0.5)) {
-                AVFrame* src_frame = impl_->frame;
+                AVFrame* src_frame = impl_->frame.get();
                 if (impl_->using_hw_decode && impl_->frame->format == impl_->hw_pix_fmt) {
-                    if (av_hwframe_transfer_data(impl_->sw_frame, impl_->frame, 0) < 0) {
-                        av_frame_unref(impl_->frame);
+                    if (av_hwframe_transfer_data(impl_->sw_frame.get(), impl_->frame.get(), 0) < 0) {
+                        av_frame_unref(impl_->frame.get());
                         return false;
                     }
                     impl_->sw_frame->pts = impl_->frame->pts;
-                    src_frame = impl_->sw_frame;
+                    src_frame = impl_->sw_frame.get();
                 }
 
                 bool needs_sws_recreate = (src_frame->width != impl_->source_width) ||
@@ -344,17 +334,14 @@ retry_decode:
                                           (src_frame->format != impl_->pix_fmt);
 
                 if (needs_sws_recreate) {
-                    if (impl_->sws_ctx) {
-                        sws_freeContext(impl_->sws_ctx);
-                        impl_->sws_ctx = nullptr;
-                    }
+                    impl_->sws_ctx.reset();
                     impl_->source_width = src_frame->width;
                     impl_->source_height = src_frame->height;
                     impl_->pix_fmt = src_frame->format;
 
                     if (impl_->source_width <= 0 || impl_->source_height <= 0 || impl_->pix_fmt < 0) {
-                        av_frame_unref(impl_->sw_frame);
-                        av_frame_unref(impl_->frame);
+                        av_frame_unref(impl_->sw_frame.get());
+                        av_frame_unref(impl_->frame.get());
                         return false;
                     }
 
@@ -368,33 +355,33 @@ retry_decode:
                         impl_->height = static_cast<int>(impl_->source_height * scale) & ~1;
                     }
 
-                    impl_->sws_ctx = sws_getContext(
+                    impl_->sws_ctx.reset(sws_getContext(
                         impl_->source_width, impl_->source_height, static_cast<AVPixelFormat>(impl_->pix_fmt),
                         impl_->width, impl_->height, AV_PIX_FMT_RGBA,
                         SWS_BILINEAR, nullptr, nullptr, nullptr
-                    );
+                    ));
                     if (!impl_->sws_ctx) {
-                        av_frame_unref(impl_->sw_frame);
-                        av_frame_unref(impl_->frame);
+                        av_frame_unref(impl_->sw_frame.get());
+                        av_frame_unref(impl_->frame.get());
                         return false;
                     }
                 }
 
                 if (impl_->width <= 0 || impl_->height <= 0 || !impl_->sws_ctx) {
-                    av_frame_unref(impl_->sw_frame);
-                    av_frame_unref(impl_->frame);
+                    av_frame_unref(impl_->sw_frame.get());
+                    av_frame_unref(impl_->frame.get());
                     return false;
                 }
 
                 if (impl_->width > 8192 || impl_->height > 8192) {
-                    av_frame_unref(impl_->sw_frame);
-                    av_frame_unref(impl_->frame);
+                    av_frame_unref(impl_->sw_frame.get());
+                    av_frame_unref(impl_->frame.get());
                     return false;
                 }
 
                 if (!src_frame->data[0]) {
-                    av_frame_unref(impl_->sw_frame);
-                    av_frame_unref(impl_->frame);
+                    av_frame_unref(impl_->sw_frame.get());
+                    av_frame_unref(impl_->frame.get());
                     return false;
                 }
 
@@ -404,49 +391,49 @@ retry_decode:
                 uint8_t* dest[1] = { rgba_buffer.data() };
                 int dest_linesize[1] = { impl_->width * 4 };
 
-                sws_scale(impl_->sws_ctx,
+                sws_scale(impl_->sws_ctx.get(),
                     src_frame->data, src_frame->linesize,
                     0, impl_->source_height,
                     dest, dest_linesize);
 
                 impl_->last_decoded_pts = frame_ts;
 
-                av_frame_unref(impl_->sw_frame);
-                av_frame_unref(impl_->frame);
+                av_frame_unref(impl_->sw_frame.get());
+                av_frame_unref(impl_->frame.get());
                 return true;
             } else {
-                av_frame_unref(impl_->frame);
+                av_frame_unref(impl_->frame.get());
             }
         }
     }
 
     if (read_result == AVERROR_EOF) {
-        avcodec_send_packet(impl_->codec_ctx, nullptr);
+        avcodec_send_packet(impl_->codec_ctx.get(), nullptr);
 
-        while (avcodec_receive_frame(impl_->codec_ctx, impl_->frame) >= 0) {
+        while (avcodec_receive_frame(impl_->codec_ctx.get(), impl_->frame.get()) >= 0) {
             double frame_ts = static_cast<double>(impl_->frame->pts) *
                 av_q2d(video_stream->time_base);
 
             if (frame_ts >= timestamp_seconds - (frame_duration * 0.5)) {
-                AVFrame* src_frame = impl_->frame;
+                AVFrame* src_frame = impl_->frame.get();
                 if (impl_->using_hw_decode && impl_->frame->format == impl_->hw_pix_fmt) {
-                    if (av_hwframe_transfer_data(impl_->sw_frame, impl_->frame, 0) < 0) {
-                        av_frame_unref(impl_->frame);
+                    if (av_hwframe_transfer_data(impl_->sw_frame.get(), impl_->frame.get(), 0) < 0) {
+                        av_frame_unref(impl_->frame.get());
                         continue;
                     }
                     impl_->sw_frame->pts = impl_->frame->pts;
-                    src_frame = impl_->sw_frame;
+                    src_frame = impl_->sw_frame.get();
                 }
 
                 if (impl_->width <= 0 || impl_->height <= 0 || !impl_->sws_ctx) {
-                    av_frame_unref(impl_->sw_frame);
-                    av_frame_unref(impl_->frame);
+                    av_frame_unref(impl_->sw_frame.get());
+                    av_frame_unref(impl_->frame.get());
                     continue;
                 }
 
                 if (!src_frame->data[0]) {
-                    av_frame_unref(impl_->sw_frame);
-                    av_frame_unref(impl_->frame);
+                    av_frame_unref(impl_->sw_frame.get());
+                    av_frame_unref(impl_->frame.get());
                     continue;
                 }
 
@@ -456,18 +443,18 @@ retry_decode:
                 uint8_t* dest[1] = { rgba_buffer.data() };
                 int dest_linesize[1] = { impl_->width * 4 };
 
-                sws_scale(impl_->sws_ctx,
+                sws_scale(impl_->sws_ctx.get(),
                     src_frame->data, src_frame->linesize,
                     0, impl_->source_height,
                     dest, dest_linesize);
 
                 impl_->last_decoded_pts = frame_ts;
 
-                av_frame_unref(impl_->sw_frame);
-                av_frame_unref(impl_->frame);
+                av_frame_unref(impl_->sw_frame.get());
+                av_frame_unref(impl_->frame.get());
                 return true;
             }
-            av_frame_unref(impl_->frame);
+            av_frame_unref(impl_->frame.get());
         }
     }
 
@@ -475,9 +462,9 @@ retry_decode:
         tried_seek_fallback = true;
         int64_t target_ts = static_cast<int64_t>(timestamp_seconds / av_q2d(video_stream->time_base));
 
-        if (av_seek_frame(impl_->format_ctx, impl_->video_stream_index, target_ts,
+        if (av_seek_frame(impl_->format_ctx.get(), impl_->video_stream_index, target_ts,
                           AVSEEK_FLAG_BACKWARD) >= 0) {
-            avcodec_flush_buffers(impl_->codec_ctx);
+            avcodec_flush_buffers(impl_->codec_ctx.get());
             impl_->last_decoded_pts = -1.0;
             goto retry_decode;
         }
@@ -489,33 +476,30 @@ retry_decode:
 bool VideoDecoder::decode_next_frame(std::vector<uint8_t>& rgba_buffer) {
     if (!impl_->is_open) return false;
 
-    while (av_read_frame(impl_->format_ctx, impl_->packet) >= 0) {
+    while (av_read_frame(impl_->format_ctx.get(), impl_->packet.get()) >= 0) {
         if (impl_->packet->stream_index != impl_->video_stream_index) {
-            av_packet_unref(impl_->packet);
+            av_packet_unref(impl_->packet.get());
             continue;
         }
 
-        int ret = avcodec_send_packet(impl_->codec_ctx, impl_->packet);
-        av_packet_unref(impl_->packet);
+        int ret = avcodec_send_packet(impl_->codec_ctx.get(), impl_->packet.get());
+        av_packet_unref(impl_->packet.get());
 
         if (ret < 0) continue;
 
-        if (avcodec_receive_frame(impl_->codec_ctx, impl_->frame) >= 0) {
+        if (avcodec_receive_frame(impl_->codec_ctx.get(), impl_->frame.get()) >= 0) {
             bool needs_sws_recreate = (impl_->frame->width != impl_->source_width) ||
                                       (impl_->frame->height != impl_->source_height) ||
                                       (impl_->frame->format != impl_->pix_fmt);
 
             if (needs_sws_recreate) {
-                if (impl_->sws_ctx) {
-                    sws_freeContext(impl_->sws_ctx);
-                    impl_->sws_ctx = nullptr;
-                }
+                impl_->sws_ctx.reset();
                 impl_->source_width = impl_->frame->width;
                 impl_->source_height = impl_->frame->height;
                 impl_->pix_fmt = impl_->frame->format;
 
                 if (impl_->source_width <= 0 || impl_->source_height <= 0 || impl_->pix_fmt < 0) {
-                    av_frame_unref(impl_->frame);
+                    av_frame_unref(impl_->frame.get());
                     return false;
                 }
 
@@ -529,29 +513,29 @@ bool VideoDecoder::decode_next_frame(std::vector<uint8_t>& rgba_buffer) {
                     impl_->height = static_cast<int>(impl_->source_height * scale) & ~1;
                 }
 
-                impl_->sws_ctx = sws_getContext(
+                impl_->sws_ctx.reset(sws_getContext(
                     impl_->source_width, impl_->source_height, static_cast<AVPixelFormat>(impl_->pix_fmt),
                     impl_->width, impl_->height, AV_PIX_FMT_RGBA,
                     SWS_BILINEAR, nullptr, nullptr, nullptr
-                );
+                ));
                 if (!impl_->sws_ctx) {
-                    av_frame_unref(impl_->frame);
+                    av_frame_unref(impl_->frame.get());
                     return false;
                 }
             }
 
             if (impl_->width <= 0 || impl_->height <= 0 || !impl_->sws_ctx) {
-                av_frame_unref(impl_->frame);
+                av_frame_unref(impl_->frame.get());
                 return false;
             }
 
             if (impl_->width > 8192 || impl_->height > 8192) {
-                av_frame_unref(impl_->frame);
+                av_frame_unref(impl_->frame.get());
                 return false;
             }
 
             if (!impl_->frame->data[0]) {
-                av_frame_unref(impl_->frame);
+                av_frame_unref(impl_->frame.get());
                 return false;
             }
 
@@ -561,12 +545,12 @@ bool VideoDecoder::decode_next_frame(std::vector<uint8_t>& rgba_buffer) {
             uint8_t* dest[1] = { rgba_buffer.data() };
             int dest_linesize[1] = { impl_->width * 4 };
 
-            sws_scale(impl_->sws_ctx,
+            sws_scale(impl_->sws_ctx.get(),
                 impl_->frame->data, impl_->frame->linesize,
                 0, impl_->height,
                 dest, dest_linesize);
 
-            av_frame_unref(impl_->frame);
+            av_frame_unref(impl_->frame.get());
             return true;
         }
     }

@@ -27,9 +27,60 @@ TEST_F(VideoDecoderTest, CloseDoesNotCrash) {
     EXPECT_FALSE(decoder.is_open());
 }
 
+TEST_F(VideoDecoderTest, MultipleCloseCallsAreNoOp) {
+    decoder.close();
+    decoder.close();
+    decoder.close();
+    EXPECT_FALSE(decoder.is_open());
+}
+
+TEST_F(VideoDecoderTest, OpenFailedThenCloseIsClean) {
+    EXPECT_FALSE(decoder.open("/nonexistent/video.mp4"));
+    decoder.close();
+    EXPECT_FALSE(decoder.is_open());
+    EXPECT_EQ(decoder.width(), 0);
+    EXPECT_EQ(decoder.height(), 0);
+}
+
+TEST_F(VideoDecoderTest, DoubleOpenClosesCleanlly) {
+    EXPECT_FALSE(decoder.open("/nonexistent/a.mp4"));
+    EXPECT_FALSE(decoder.open("/nonexistent/b.mp4"));
+    EXPECT_FALSE(decoder.is_open());
+}
+
+TEST_F(VideoDecoderTest, DestructorAfterFailedOpenIsClean) {
+    {
+        VideoDecoder temp;
+        temp.open("/nonexistent/video.mp4");
+        // destructor runs here
+    }
+}
+
+TEST_F(VideoDecoderTest, DestructorWithoutOpenIsClean) {
+    {
+        VideoDecoder temp;
+        // destructor runs without ever opening
+    }
+}
+
 TEST_F(VideoDecoderTest, SeekAndDecodeWhenNotOpenFails) {
     std::vector<uint8_t> buffer;
     EXPECT_FALSE(decoder.seek_and_decode(0.0, buffer));
+}
+
+TEST_F(VideoDecoderTest, DecodeNextFrameWhenNotOpenFails) {
+    std::vector<uint8_t> buffer;
+    EXPECT_FALSE(decoder.decode_next_frame(buffer));
+}
+
+TEST_F(VideoDecoderTest, OpenEmptyPathFails) {
+    EXPECT_FALSE(decoder.open(""));
+    EXPECT_FALSE(decoder.is_open());
+}
+
+TEST_F(VideoDecoderTest, OpenDirectoryFails) {
+    EXPECT_FALSE(decoder.open("."));
+    EXPECT_FALSE(decoder.is_open());
 }
 
 class VideoEngineTest : public ::testing::Test {
