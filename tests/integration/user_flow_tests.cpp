@@ -15,7 +15,8 @@ struct UserFlowTestVars {
 
     UserFlowTestVars() {
         main_window = std::make_unique<furious::MainWindow>();
-        test_project_path = "/tmp/furious_test_project.furious";
+        auto tmp = std::filesystem::temp_directory_path() / "furious_test_project.furious";
+        test_project_path = tmp.string();
     }
 
     ~UserFlowTestVars() {
