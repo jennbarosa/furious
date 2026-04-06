@@ -257,6 +257,9 @@ void MainWindow::render() {
     if (timeline_.consume_loop_region_modification(loop_old_start, loop_old_end, loop_new_start, loop_new_end)) {
         execute_command(std::make_unique<SetLoopRegionCommand>(
             timeline_, loop_old_start, loop_old_end, loop_new_start, loop_new_end));
+        if (loop_new_end > loop_new_start) {
+            transport_controls_.set_loop_enabled(true);
+        }
     }
 
     is_playing = transport_controls_.is_playing();
