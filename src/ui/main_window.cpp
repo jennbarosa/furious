@@ -103,6 +103,23 @@ void MainWindow::render() {
     setup_dockspace();
     handle_keyboard_shortcuts();
 
+    if (transport_controls_.save_requested()) {
+        std::string filepath = transport_controls_.requested_filepath();
+        if (save_project(filepath)) {
+            transport_controls_.set_current_project_path(filepath);
+        } else {
+            std::fprintf(stderr, "Failed to save project: %s\n", filepath.c_str());
+        }
+    }
+    if (transport_controls_.load_requested()) {
+        std::string filepath = transport_controls_.requested_filepath();
+        if (load_project(filepath)) {
+            transport_controls_.set_current_project_path(filepath);
+        } else {
+            std::fprintf(stderr, "Failed to load project: %s\n", filepath.c_str());
+        }
+    }
+
     auto t1 = std::chrono::high_resolution_clock::now();
 
     if (cache_building_) {
@@ -267,23 +284,6 @@ void MainWindow::render() {
     if (transport_controls_.reset_requested()) {
         timeline_.set_playhead_position(0.0);
         audio_engine_.set_playhead_seconds(0.0);
-    }
-
-    if (transport_controls_.save_requested()) {
-        std::string filepath = transport_controls_.requested_filepath();
-        if (save_project(filepath)) {
-            transport_controls_.set_current_project_path(filepath);
-        } else {
-            std::fprintf(stderr, "Failed to save project: %s\n", filepath.c_str());
-        }
-    }
-    if (transport_controls_.load_requested()) {
-        std::string filepath = transport_controls_.requested_filepath();
-        if (load_project(filepath)) {
-            transport_controls_.set_current_project_path(filepath);
-        } else {
-            std::fprintf(stderr, "Failed to load project: %s\n", filepath.c_str());
-        }
     }
 
     if (is_playing && transport_controls_.follow_playhead()) {
@@ -1381,14 +1381,15 @@ bool MainWindow::load_project(const std::string& filepath) {
         audio_engine_.unload_clip();
     }
 
+    viewport_.set_active_clips({});
+    timeline_data_.clear_all();
+
     source_library_.clear();
     video_engine_.clear_sources();
     for (const auto& source : data.sources) {
         source_library_.add_source_direct(source);
         video_engine_.register_source(source);
     }
-
-    timeline_data_.clear_all();
     if (!data.tracks.empty()) {
         timeline_data_.set_tracks(data.tracks);
     } else {
