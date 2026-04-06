@@ -209,7 +209,7 @@ void MainWindow::render() {
 
     double current_beats = timeline_.playhead_position();
     bool playhead_moved = std::abs(current_beats - last_synced_beats_) > 0.0001;
-    bool needs_video_sync = is_playing || is_seeking || is_previewing || playhead_moved || !video_synced_once_;
+    bool needs_video_sync = is_playing || is_seeking || is_previewing || playhead_moved || !video_synced_once_ || dirty_;
 
     if (needs_video_sync) {
         sync_video_to_playhead();
@@ -1563,7 +1563,6 @@ void MainWindow::render_loading_modal() {
 }
 
 void MainWindow::execute_command(std::unique_ptr<Command> cmd) {
-    viewport_.set_active_clips({});
     command_history_.execute(std::move(cmd));
     dirty_ = true;
 }
@@ -1573,7 +1572,6 @@ void MainWindow::handle_keyboard_shortcuts() {
 
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z) && !io.KeyShift) {
         if (command_history_.can_undo()) {
-            viewport_.set_active_clips({});
             command_history_.undo();
             dirty_ = true;
         }
@@ -1582,7 +1580,6 @@ void MainWindow::handle_keyboard_shortcuts() {
     if ((io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) ||
         (io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_Z))) {
         if (command_history_.can_redo()) {
-            viewport_.set_active_clips({});
             command_history_.redo();
             dirty_ = true;
         }
