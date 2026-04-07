@@ -108,11 +108,7 @@ void RegisterViewportTests(ImGuiTestEngine* engine) {
         vars.timeline_data.add_clip(clip2);
 
         auto clips = vars.timeline_data.clips_at_beat(2.0);
-        std::vector<const furious::TimelineClip*> const_clips;
-        for (auto* c : clips) {
-            const_clips.push_back(c);
-        }
-        vars.viewport.set_active_clips(const_clips);
+        vars.viewport.set_active_clips(clips);
 
         ctx->Yield();
         IM_CHECK_EQ(clips.size(), 2u);

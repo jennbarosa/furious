@@ -232,6 +232,23 @@ void MainWindow::render() {
     pitch_editor_.set_playhead_beat(compute_pitch_editor_playhead());
     pitch_editor_.render();
 
+    std::string video_error = video_engine_.consume_error();
+    if (!video_error.empty()) {
+        pending_video_error_ = video_error;
+    }
+    if (!pending_video_error_.empty()) {
+        ImGui::OpenPopup("Video Error");
+    }
+    if (ImGui::BeginPopupModal("Video Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("%s", pending_video_error_.c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("OK")) {
+            pending_video_error_.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     auto t4 = std::chrono::high_resolution_clock::now();
 
     auto dockspace_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -307,7 +324,8 @@ void MainWindow::sync_video_to_playhead() {
         }
     }
 
-    std::vector<const TimelineClip*> const_clips;
+    std::vector<TimelineClip*> visible_clips;
+    visible_clips.reserve(active_clips.size());
     for (TimelineClip* clip : active_clips) {
         // Apply mute/solo logic
         const Track& track = timeline_data_.track(clip->track_index);
@@ -406,10 +424,10 @@ void MainWindow::sync_video_to_playhead() {
             }
         }
 
-        const_clips.push_back(clip);
+        visible_clips.push_back(clip);
     }
 
-    viewport_.set_active_clips(const_clips);
+    viewport_.set_active_clips(std::move(visible_clips));
     viewport_.set_selected_clip_id(timeline_.selected_clip_id());
 }
 
@@ -1381,7 +1399,7 @@ bool MainWindow::load_project(const std::string& filepath) {
         audio_engine_.unload_clip();
     }
 
-    viewport_.set_active_clips({});
+    viewport_.set_active_clips(std::vector<TimelineClip*>{});
     timeline_data_.clear_all();
 
     source_library_.clear();

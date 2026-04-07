@@ -2,6 +2,7 @@
 #include "furious/av_ptr.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 extern "C" {
 #include <libavutil/imgutils.h>
@@ -473,6 +474,178 @@ retry_decode:
     return false;
 }
 
+namespace {
+
+void copy_yuv_planes(AVFrame* src_frame, DecodedFrame& out) {
+    int fmt = src_frame->format;
+    int w = src_frame->width;
+    int h = src_frame->height;
+    out.width = w;
+    out.height = h;
+
+    if (fmt == AV_PIX_FMT_NV12 || fmt == AV_PIX_FMT_NV21) {
+        out.format = YUVFormat::NV12;
+        out.y_stride = src_frame->linesize[0];
+        out.uv_stride = src_frame->linesize[1];
+        out.v_stride = 0;
+
+        size_t y_size = static_cast<size_t>(out.y_stride) * h;
+        size_t uv_size = static_cast<size_t>(out.uv_stride) * (h / 2);
+
+        out.y_plane.resize(y_size);
+        out.uv_plane.resize(uv_size);
+        out.v_plane.clear();
+
+        std::memcpy(out.y_plane.data(), src_frame->data[0], y_size);
+        std::memcpy(out.uv_plane.data(), src_frame->data[1], uv_size);
+    } else if (fmt == AV_PIX_FMT_YUV420P || fmt == AV_PIX_FMT_YUVJ420P) {
+        out.format = YUVFormat::YUV420P;
+        out.y_stride = src_frame->linesize[0];
+        out.uv_stride = src_frame->linesize[1];
+        out.v_stride = src_frame->linesize[2];
+
+        size_t y_size = static_cast<size_t>(out.y_stride) * h;
+        size_t u_size = static_cast<size_t>(out.uv_stride) * (h / 2);
+        size_t v_size = static_cast<size_t>(out.v_stride) * (h / 2);
+
+        out.y_plane.resize(y_size);
+        out.uv_plane.resize(u_size);
+        out.v_plane.resize(v_size);
+
+        std::memcpy(out.y_plane.data(), src_frame->data[0], y_size);
+        std::memcpy(out.uv_plane.data(), src_frame->data[1], u_size);
+        std::memcpy(out.v_plane.data(), src_frame->data[2], v_size);
+    } else {
+        out.format = YUVFormat::Unknown;
+    }
+}
+
+} // anonymous namespace
+
+bool VideoDecoder::seek_and_decode_yuv(double timestamp_seconds, DecodedFrame& out) {
+    if (!impl_->is_open) return false;
+    if (!impl_->format_ctx || !impl_->codec_ctx || !impl_->frame || !impl_->packet) return false;
+
+    if (impl_->video_stream_index < 0 ||
+        static_cast<unsigned>(impl_->video_stream_index) >= impl_->format_ctx->nb_streams) {
+        return false;
+    }
+
+    if (timestamp_seconds < 0.0) timestamp_seconds = 0.0;
+
+    AVStream* video_stream = impl_->format_ctx->streams[impl_->video_stream_index];
+    if (!video_stream || !video_stream->time_base.den) return false;
+
+    double frame_duration = 1.0 / impl_->fps;
+
+    bool need_seek = (impl_->last_decoded_pts < 0.0) ||
+                     (timestamp_seconds < impl_->last_decoded_pts - frame_duration) ||
+                     (timestamp_seconds > impl_->last_decoded_pts + 2.0);
+
+    if (need_seek) {
+        int64_t target_ts = static_cast<int64_t>(timestamp_seconds / av_q2d(video_stream->time_base));
+        if (av_seek_frame(impl_->format_ctx.get(), impl_->video_stream_index, target_ts,
+                          AVSEEK_FLAG_BACKWARD) < 0) {
+            return false;
+        }
+        avcodec_flush_buffers(impl_->codec_ctx.get());
+        impl_->last_decoded_pts = -1.0;
+    }
+
+    bool tried_seek_fallback = need_seek;
+
+retry_decode_yuv:
+    int read_result;
+    while ((read_result = av_read_frame(impl_->format_ctx.get(), impl_->packet.get())) >= 0) {
+        if (impl_->packet->stream_index != impl_->video_stream_index) {
+            av_packet_unref(impl_->packet.get());
+            continue;
+        }
+
+        int ret = avcodec_send_packet(impl_->codec_ctx.get(), impl_->packet.get());
+        av_packet_unref(impl_->packet.get());
+        if (ret < 0) continue;
+
+        while (avcodec_receive_frame(impl_->codec_ctx.get(), impl_->frame.get()) >= 0) {
+            double frame_ts = static_cast<double>(impl_->frame->pts) *
+                av_q2d(video_stream->time_base);
+
+            if (frame_ts >= timestamp_seconds - (frame_duration * 0.5)) {
+                AVFrame* src_frame = impl_->frame.get();
+                if (impl_->using_hw_decode && impl_->frame->format == impl_->hw_pix_fmt) {
+                    if (av_hwframe_transfer_data(impl_->sw_frame.get(), impl_->frame.get(), 0) < 0) {
+                        av_frame_unref(impl_->frame.get());
+                        return false;
+                    }
+                    impl_->sw_frame->pts = impl_->frame->pts;
+                    src_frame = impl_->sw_frame.get();
+                }
+
+                if (src_frame->width <= 0 || src_frame->height <= 0) {
+                    av_frame_unref(impl_->sw_frame.get());
+                    av_frame_unref(impl_->frame.get());
+                    return false;
+                }
+
+                copy_yuv_planes(src_frame, out);
+
+                impl_->last_decoded_pts = frame_ts;
+                av_frame_unref(impl_->sw_frame.get());
+                av_frame_unref(impl_->frame.get());
+
+                if (out.format == YUVFormat::Unknown) return false;
+                return true;
+            } else {
+                av_frame_unref(impl_->frame.get());
+            }
+        }
+    }
+
+    if (read_result == AVERROR_EOF) {
+        avcodec_send_packet(impl_->codec_ctx.get(), nullptr);
+
+        while (avcodec_receive_frame(impl_->codec_ctx.get(), impl_->frame.get()) >= 0) {
+            double frame_ts = static_cast<double>(impl_->frame->pts) *
+                av_q2d(video_stream->time_base);
+
+            if (frame_ts >= timestamp_seconds - (frame_duration * 0.5)) {
+                AVFrame* src_frame = impl_->frame.get();
+                if (impl_->using_hw_decode && impl_->frame->format == impl_->hw_pix_fmt) {
+                    if (av_hwframe_transfer_data(impl_->sw_frame.get(), impl_->frame.get(), 0) < 0) {
+                        av_frame_unref(impl_->frame.get());
+                        continue;
+                    }
+                    impl_->sw_frame->pts = impl_->frame->pts;
+                    src_frame = impl_->sw_frame.get();
+                }
+
+                copy_yuv_planes(src_frame, out);
+
+                impl_->last_decoded_pts = frame_ts;
+                av_frame_unref(impl_->sw_frame.get());
+                av_frame_unref(impl_->frame.get());
+
+                if (out.format == YUVFormat::Unknown) return false;
+                return true;
+            }
+            av_frame_unref(impl_->frame.get());
+        }
+    }
+
+    if (!tried_seek_fallback) {
+        tried_seek_fallback = true;
+        int64_t target_ts = static_cast<int64_t>(timestamp_seconds / av_q2d(video_stream->time_base));
+        if (av_seek_frame(impl_->format_ctx.get(), impl_->video_stream_index, target_ts,
+                          AVSEEK_FLAG_BACKWARD) >= 0) {
+            avcodec_flush_buffers(impl_->codec_ctx.get());
+            impl_->last_decoded_pts = -1.0;
+            goto retry_decode_yuv;
+        }
+    }
+
+    return false;
+}
+
 bool VideoDecoder::decode_next_frame(std::vector<uint8_t>& rgba_buffer) {
     if (!impl_->is_open) return false;
 
@@ -564,5 +737,6 @@ double VideoDecoder::fps() const { return impl_->fps; }
 double VideoDecoder::duration_seconds() const { return impl_->duration_seconds; }
 int64_t VideoDecoder::total_frames() const { return impl_->total_frames; }
 std::string VideoDecoder::decoder_type() const { return impl_->decoder_name; }
+int VideoDecoder::pixel_format() const { return impl_->pix_fmt; }
 
 } // namespace furious
