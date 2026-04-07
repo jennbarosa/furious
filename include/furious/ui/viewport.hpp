@@ -38,7 +38,7 @@ public:
     void set_timeline_data(TimelineData* data) { timeline_data_ = data; }
     void set_source_library(SourceLibrary* library) { source_library_ = library; }
 
-    void set_active_clips(const std::vector<const TimelineClip*>& clips) { active_clips_ = clips; }
+    void set_active_clips(std::vector<TimelineClip*> clips) { active_clips_ = std::move(clips); }
 
     void set_selected_clip_id(const std::string& id) { selected_clip_id_ = id; }
     [[nodiscard]] const std::string& selected_clip_id() const { return selected_clip_id_; }
@@ -59,7 +59,7 @@ private:
     TimelineData* timeline_data_ = nullptr;
     SourceLibrary* source_library_ = nullptr;
 
-    std::vector<const TimelineClip*> active_clips_;
+    std::vector<TimelineClip*> active_clips_;
     std::string selected_clip_id_;
     std::string dragging_clip_id_;
     bool dragging_ = false;

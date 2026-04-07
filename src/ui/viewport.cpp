@@ -40,7 +40,7 @@ void Viewport::render() {
     );
 
     if (video_engine_ && timeline_data_) {
-        for (const TimelineClip* clip : active_clips_) {
+        for (TimelineClip* clip : active_clips_) {
             if (!clip) continue;
 
             uint32_t tex_id = video_engine_->get_texture(clip->id);
@@ -165,7 +165,7 @@ void Viewport::render() {
         dragging_clip_id_.clear();
 
         for (auto it = active_clips_.rbegin(); it != active_clips_.rend(); ++it) {
-            const TimelineClip* clip = *it;
+            TimelineClip* clip = *it;
             if (!clip) continue;
 
             int tex_w = video_engine_ ? video_engine_->get_texture_width(clip->source_id) : 100;

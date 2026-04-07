@@ -85,6 +85,7 @@ private:
     double last_synced_beats_ = -1.0;
     bool video_synced_once_ = false;
     std::string current_project_path_;
+    std::string pending_video_error_;
     bool dirty_ = false;
     std::string pending_source_removal_;
 

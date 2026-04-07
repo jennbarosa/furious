@@ -56,6 +56,7 @@ public:
     void update();
 
     [[nodiscard]] std::string get_active_decoder_info() const;
+    [[nodiscard]] std::string consume_error();
 
 private:
     struct Impl;
