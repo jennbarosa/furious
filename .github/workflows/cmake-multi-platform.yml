@@ -92,7 +92,7 @@ jobs:
           git clone --recurse-submodules https://github.com/microsoft/vcpkg.git ${{ github.workspace }}/vcpkg
           .\vcpkg\bootstrap-vcpkg.bat
         }
-        .\vcpkg\vcpkg.exe install --triplet x64-windows
+
 
     - name: Cache FetchContent dependencies
       uses: actions/cache@v4
@@ -107,6 +107,7 @@ jobs:
         cmake -B build
         -DCMAKE_BUILD_TYPE=Release
         "-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake"
+        -DVCPKG_MANIFEST_MODE=OFF
         -DBUILD_INTEGRATION_TESTS=OFF
         -DFETCHCONTENT_UPDATES_DISCONNECTED=ON
 
